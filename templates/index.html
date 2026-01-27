@@ -163,12 +163,17 @@
                     <label for="scale_factor">放缩因子 (默认: 0.03)</label>
                     <input type="number" id="scale_factor" name="scale_factor" step="0.01" min="0.01" max="1.0" value="0.03">
                 </div>
-                
-                <div class="form-group">
-                    <label for="pixel_scale">像素块大小 (默认: 20)</label>
-                    <input type="number" id="pixel_scale" name="pixel_scale" min="5" max="100" value="20">
+                 <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="reduce_colors" name="reduce_colors">
+                        减少生成图像的颜色种类
+                    </label>
                 </div>
-                
+
+                <div class="form-group" id="color_count_group" style="display:none;">
+                    <label for="color_count">目标颜色数量</label>
+                    <input type="number" id="color_count" name="color_count" min="1" max="256" value="16">
+                </div>
                 <button type="submit">处理图片</button>
             </form>
         </div>
@@ -190,6 +195,8 @@
             </div>
             {% endif %}
         </div>
+       
+
     </div>
 
     <script>
@@ -203,6 +210,14 @@
                 const submitBtn = form.querySelector('button');
                 submitBtn.disabled = true;
                 submitBtn.textContent = '处理中...';
+            });
+        });
+        document.addEventListener('DOMContentLoaded', function () {
+            const checkbox = document.getElementById('reduce_colors');
+            const colorCountGroup = document.getElementById('color_count_group');
+
+            checkbox.addEventListener('change', function () {
+                colorCountGroup.style.display = this.checked ? 'block' : 'none';
             });
         });
     </script>

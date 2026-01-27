@@ -66,7 +66,77 @@ def find_nearest_color(target_rgb, color_database):
     nearest_color = color_data.loc[color_data['distance'].idxmin()]
     return nearest_color['num'], (nearest_color['R'], nearest_color['G'], nearest_color['B'])
 
-def process_image_with_color_code(input_path, output_path, color_db_path, scale_factor=0.03, pixel_scale=50):
+from sklearn.cluster import KMeans
+
+def reduce_image_colors(
+    image,
+    used_color_codes,
+    color_database,
+    target_color_count
+):
+    """
+    根据已生成的图像，减少颜色种类数量
+
+    参数：
+        image (PIL.Image): 已生成的未减少颜色的图片
+        used_color_codes (set): 图片中实际出现的颜色编号
+        color_database (DataFrame): 颜色数据库（含 num, R, G, B）
+        target_color_count (int): 目标颜色数量
+
+    返回：
+        PIL.Image: 颜色数量已减少的新图片
+    """
+
+    actual_count = len(used_color_codes)
+    if target_color_count >= actual_count:
+        raise ValueError(
+            f"目标颜色数量 ({target_color_count}) ≥ 实际颜色种类数 ({actual_count})"
+        )
+
+    # === 1. 构建调色板（仅使用出现过的颜色） ===
+    palette = color_database[color_database['num'].isin(used_color_codes)]
+    rgb_array = palette[['R', 'G', 'B']].values
+
+    # === 2. 聚类 ===
+    kmeans = KMeans(n_clusters=target_color_count, random_state=0)
+    labels = kmeans.fit_predict(rgb_array)
+
+    # 原颜色编号 -> 聚类编号
+    color_map = dict(zip(palette['num'], labels))
+
+    # 聚类编号 -> 代表色（取第一个）
+    cluster_to_rgb = {}
+    for code, label in color_map.items():
+        if label not in cluster_to_rgb:
+            row = palette[palette['num'] == code].iloc[0]
+            cluster_to_rgb[label] = (int(row.R), int(row.G), int(row.B))
+
+    # === 3. 生成新图像 ===
+    reduced_img = image.copy()
+    pixels = reduced_img.load()
+
+    width, height = reduced_img.size
+
+    for y in range(height):
+        for x in range(width):
+            r, g, b = pixels[x, y]
+
+            # 找到该像素最接近的原颜色编号
+            # （因为 image 是阶段1生成的，RGB 一定来自调色板）
+            row = palette[
+                (palette['R'] == r) &
+                (palette['G'] == g) &
+                (palette['B'] == b)
+            ]
+
+            if not row.empty:
+                old_code = row.iloc[0]['num']
+                new_label = color_map[old_code]
+                pixels[x, y] = cluster_to_rgb[new_label]
+
+    return reduced_img
+
+def process_image_with_color_code(input_path, output_path, color_db_path, scale_factor=0.03):
     """改进的图片处理函数"""
     color_database = load_color_database(color_db_path)
     
@@ -98,11 +168,13 @@ def process_image_with_color_code(input_path, output_path, color_db_path, scale_
         except IOError:
             font = ImageFont.load_default()
 
+    used_color_codes = set()
     # 处理每个像素
     for y in range(target_height):
         for x in range(target_width):
             pixel_r, pixel_g, pixel_b = img_resized.getpixel((x, y))
             color_code, nearest_rgb = find_nearest_color((pixel_r, pixel_g, pixel_b), color_database)
+            used_color_codes.add(color_code)
             nr, ng, nb = nearest_rgb
             
             # 绘制像素块
@@ -131,4 +203,4 @@ def process_image_with_color_code(input_path, output_path, color_db_path, scale_
     
     # 保存结果
     output_img.save(output_path)
-    return output_path
+    return output_path,output_img,used_color_codes
