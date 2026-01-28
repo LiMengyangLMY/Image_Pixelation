@@ -159,15 +159,17 @@ def process_image_with_color_code(input_path, output_path, color_db_path, scale_
     output_img = Image.new("RGB", (output_width, output_height), color="white")
     draw = ImageDraw.Draw(output_img)   
 
+    font_size = int(pixel_scale / 2)
+    font_size = max(font_size, 1)
     # 字体加载（兼容不同系统）
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", pixel_scale // 2)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
     except IOError:
         try:
-            font = ImageFont.truetype("arial.ttf", pixel_scale // 2)
+            font = ImageFont.truetype("arial.ttf", font_size)
         except IOError:
             font = ImageFont.load_default()
-
+  
     used_color_codes = set()
     # 处理每个像素
     for y in range(target_height):
@@ -186,10 +188,9 @@ def process_image_with_color_code(input_path, output_path, color_db_path, scale_
 
             # 绘制颜色编号
             text_color = (255 - nr, 255 - ng, 255 - nb)
-            font_size = min(pixel_scale // 2, 12)
             
             try:
-                current_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+                current_font = ImageFont.truetype("./font/arial.ttf", font_size)
             except:
                 current_font = ImageFont.load_default()
             
