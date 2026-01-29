@@ -68,140 +68,202 @@ def find_nearest_color(target_rgb, color_database):
 
 from sklearn.cluster import KMeans
 
-def reduce_image_colors(
-    image,
-    used_color_codes,
-    color_database,
-    target_color_count
-):
+
+
+import numpy as np
+from PIL import Image
+
+def image_to_color_array(input_path, color_db_path, scale_factor=0.03):
     """
-    根据已生成的图像，减少颜色种类数量
-
-    参数：
-        image (PIL.Image): 已生成的未减少颜色的图片
-        used_color_codes (set): 图片中实际出现的颜色编号
-        color_database (DataFrame): 颜色数据库（含 num, R, G, B）
-        target_color_count (int): 目标颜色数量
-
-    返回：
-        PIL.Image: 颜色数量已减少的新图片
-    """
-
-    actual_count = len(used_color_codes)
-    if target_color_count >= actual_count:
-        raise ValueError(
-            f"目标颜色数量 ({target_color_count}) ≥ 实际颜色种类数 ({actual_count})"
-        )
-
-    # === 1. 构建调色板（仅使用出现过的颜色） ===
-    palette = color_database[color_database['num'].isin(used_color_codes)]
-    rgb_array = palette[['R', 'G', 'B']].values
-
-    # === 2. 聚类 ===
-    kmeans = KMeans(n_clusters=target_color_count, random_state=0)
-    labels = kmeans.fit_predict(rgb_array)
-
-    # 原颜色编号 -> 聚类编号
-    color_map = dict(zip(palette['num'], labels))
-
-    # 聚类编号 -> 代表色（取第一个）
-    cluster_to_rgb = {}
-    for code, label in color_map.items():
-        if label not in cluster_to_rgb:
-            row = palette[palette['num'] == code].iloc[0]
-            cluster_to_rgb[label] = (int(row.R), int(row.G), int(row.B))
-
-    # === 3. 生成新图像 ===
-    reduced_img = image.copy()
-    pixels = reduced_img.load()
-
-    width, height = reduced_img.size
-
-    for y in range(height):
-        for x in range(width):
-            r, g, b = pixels[x, y]
-
-            # 找到该像素最接近的原颜色编号
-            # （因为 image 是阶段1生成的，RGB 一定来自调色板）
-            row = palette[
-                (palette['R'] == r) &
-                (palette['G'] == g) &
-                (palette['B'] == b)
-            ]
-
-            if not row.empty:
-                old_code = row.iloc[0]['num']
-                new_label = color_map[old_code]
-                pixels[x, y] = cluster_to_rgb[new_label]
-
-    return reduced_img
-
-def process_image_with_color_code(input_path, output_path, color_db_path, scale_factor=0.03):
-    """改进的图片处理函数"""
-    color_database = load_color_database(color_db_path)
+    将图片转换为 4 维数组：[颜色编码, R, G, B]
     
+    返回：
+        color_array: shape = (H, W, 4)
+    """
+    color_database = load_color_database(color_db_path)
+    color_code_count = {}
+
     try:
-        img = Image.open(input_path).convert('RGB') #转换成RGB模式
+        img = Image.open(input_path).convert('RGB')
     except Exception as e:
         raise Exception(f"打开图片失败: {e}")
-    
-    #输出与原图大小相同的图纸
-    pixel_scale = 1/scale_factor
 
     original_width, original_height = img.size
     target_width = max(1, int(original_width * scale_factor))
     target_height = max(1, int(original_height * scale_factor))
-    #Image.NEAREST：最近邻插值方法
+    #压缩图片关键步骤
     img_resized = img.resize((target_width, target_height), Image.NEAREST)
 
-    output_width = original_width
-    output_height = original_height
-    output_img = Image.new("RGB", (output_width, output_height), color="white")
-    draw = ImageDraw.Draw(output_img)   
+    # 初始化 4 维数组
+    color_array = np.empty((target_height, target_width, 4), dtype=object)
 
-    font_size = int(pixel_scale / 2)
-    font_size = max(font_size, 1)
-    # 字体加载（兼容不同系统）
-    try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
-    except IOError:
-        try:
-            font = ImageFont.truetype("arial.ttf", font_size)
-        except IOError:
-            font = ImageFont.load_default()
-  
-    used_color_codes = set()
-    # 处理每个像素
     for y in range(target_height):
         for x in range(target_width):
-            pixel_r, pixel_g, pixel_b = img_resized.getpixel((x, y))
-            color_code, nearest_rgb = find_nearest_color((pixel_r, pixel_g, pixel_b), color_database)
-            used_color_codes.add(color_code)
+            r, g, b = img_resized.getpixel((x, y))
+            color_code, nearest_rgb = find_nearest_color((r, g, b), color_database)
             nr, ng, nb = nearest_rgb
-            
-            # 绘制像素块
+
+            color_array[y, x] = [color_code, nr, ng, nb]
+
+            if color_code in color_code_count:
+                color_code_count[color_code]["count"] += 1
+            else:
+                color_code_count[color_code] = {
+                    "count": 1,
+                    "r": int(nr),
+                    "g": int(ng),
+                    "b": int(nb)
+                }
+    return color_array,color_code_count
+
+
+from PIL import Image, ImageDraw, ImageFont
+
+def visualize_color_array(color_array, pixel_scale):
+    """
+    将 4 维数组可视化为图片
+    
+    参数：
+        color_array: (H, W, 4) -> [color_code, R, G, B]
+        pixel_scale: 单个像素块边长
+    """
+    h, w, _ = color_array.shape
+    output_width = int(w * pixel_scale)
+    output_height = int(h * pixel_scale)
+
+    output_img = Image.new("RGB", (output_width, output_height), "white")
+    draw = ImageDraw.Draw(output_img)
+
+    font_size = max(int(pixel_scale / 2), 1)
+    try:
+        font = ImageFont.truetype("arial.ttf", font_size)
+    except:
+        font = ImageFont.load_default()
+
+    for y in range(h):
+        for x in range(w):
+            color_code, r, g, b = color_array[y, x]
+
             draw.rectangle(
-                [x * pixel_scale, y * pixel_scale,
-                 (x + 1) * pixel_scale - 1, (y + 1) * pixel_scale - 1],
-                fill=(nr, ng, nb)
+                [
+                    x * pixel_scale,
+                    y * pixel_scale,
+                    (x + 1) * pixel_scale - 1,
+                    (y + 1) * pixel_scale - 1
+                ],
+                fill=(r, g, b)
             )
 
-            # 绘制颜色编号
-            text_color = (255 - nr, 255 - ng, 255 - nb)
-            
-            try:
-                current_font = ImageFont.truetype("./font/arial.ttf", font_size)
-            except:
-                current_font = ImageFont.load_default()
-            
+            text_color = (255 - r, 255 - g, 255 - b)
+
             draw.text(
-                (x * pixel_scale + pixel_scale // 2, y * pixel_scale + pixel_scale // 2),
+                (x * pixel_scale + pixel_scale // 2,
+                 y * pixel_scale + pixel_scale // 2),
                 str(color_code),
                 fill=text_color,
-                font=current_font,
+                font=font,
                 anchor="mm"
             )
+
+    return output_img
+
+import numpy as np
+from sklearn.cluster import KMeans
+
+def reduce_color_array(color_array, color_code_count, target_cluster_count):
+    """
+    基于 color_code_count 的 RGB 聚类，减少颜色种类数量
+    """
+    target_cluster_count = int(target_cluster_count)
+    codes = list(color_code_count.keys())
+    actual_color_count = len(codes)
+    if target_cluster_count >= actual_color_count:
+        raise ValueError(
+            f"目标簇数 ({target_cluster_count}) ≥ 实际颜色数 ({actual_color_count})"
+        )
+
+    # ========= 1. 构建 RGB 数据（来自 color_code_count） =========
+    rgb_array = np.array(
+        [[v["r"], v["g"], v["b"]] for v in color_code_count.values()],
+        dtype=int
+    )
+
+    # 对应的颜色编码顺序
+    code_list = list(color_code_count.keys())
+    print(target_cluster_count)
     
-    # 保存结果
+    # ========= 2. KMeans 聚类（仅 RGB） =========
+    kmeans = KMeans(n_clusters=target_cluster_count, random_state=0)
+    labels = kmeans.fit_predict(rgb_array)
+    
+    # ========= 3. 簇内选择代表颜色（按 count 最大） =========
+    cluster_to_rep = {}
+
+    for cluster_id in range(target_cluster_count):
+        # 找到该簇内的颜色编码
+        cluster_codes = [
+            code_list[i]
+            for i in range(len(code_list))
+            if labels[i] == cluster_id
+        ]
+
+        # 按出现次数选最大者
+        rep_code = max(
+            cluster_codes,
+            key=lambda c: color_code_count[c]["count"]
+        )
+
+        rep_info = color_code_count[rep_code]
+
+        cluster_to_rep[cluster_id] = {
+            "code": rep_code,
+            "r": rep_info["r"],
+            "g": rep_info["g"],
+            "b": rep_info["b"]
+        }
+
+    # ========= 4. 构建旧 code -> 新 code / rgb 映射 =========
+    code_replace_map = {}
+
+    for i, old_code in enumerate(code_list):
+        cluster_id = labels[i]
+        rep = cluster_to_rep[cluster_id]
+        code_replace_map[old_code] = rep
+
+    # ========= 5. 替换 color_array =========
+    h, w, _ = color_array.shape
+    new_color_array = np.empty_like(color_array, dtype=object)
+
+    for y in range(h):
+        for x in range(w):
+            old_code, _, _, _ = color_array[y, x]
+            rep = code_replace_map[old_code]
+
+            new_color_array[y, x] = [
+                rep["code"],
+                int(rep["r"]),
+                int(rep["g"]),
+                int(rep["b"])
+            ]
+    
+    return new_color_array
+
+
+#调用接口：像素化图纸
+def process_image_with_color_code(input_path, output_path, color_db_path, scale_factor=0.03):
+    color_array,color_code_count = image_to_color_array(input_path, color_db_path, scale_factor)
+    pixel_scale = int(1 / scale_factor)
+    output_img = visualize_color_array(color_array, pixel_scale)
     output_img.save(output_path)
-    return output_path,output_img,used_color_codes
+    used_color_codes = set(color_array[:, :, 0].flatten())
+    return output_path, output_img, used_color_codes
+
+#调用接口：像素化图纸+减少颜色数量
+def reduce_image_colors(input_path, output_path, color_db_path, scale_factor=0.03,target_color_count=1):
+    color_array,color_code_count = image_to_color_array(input_path, color_db_path, scale_factor)
+    color_array = reduce_color_array(color_array, color_code_count, target_color_count)
+    pixel_scale = int(1 / scale_factor)
+    output_img = visualize_color_array(color_array, pixel_scale)
+    output_img.save(output_path)
+    return output_path, output_img
+

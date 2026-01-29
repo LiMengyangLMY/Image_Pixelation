@@ -74,7 +74,7 @@ def index():
             output_path,full_image, used_color_codes = process_image_with_color_code(
                 input_path,
                 output_path,        
-                color_db_path,
+                color_db_path=color_db_path,
                 scale_factor=scale_factor
             )
         except Exception as e:
@@ -85,10 +85,11 @@ def index():
             if reduce_colors:
                 from image_utils import reduce_image_colors, load_color_database
 
-                reduced_img = reduce_image_colors(
-                    image=full_image,
-                    used_color_codes=used_color_codes,
-                    color_database=load_color_database(color_db_path),
+                output_path,reduced_img = reduce_image_colors(
+                    input_path,
+                    output_path,        
+                    color_db_path,
+                    scale_factor=scale_factor,
                     target_color_count=color_count
                 )
                 reduced_img.save(output_path)
