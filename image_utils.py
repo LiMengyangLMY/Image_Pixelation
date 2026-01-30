@@ -2,6 +2,7 @@ from PIL import Image, ImageDraw, ImageFont
 import os
 import pandas as pd
 import numpy as np
+import cv2
 
 """
 函数说明：
@@ -248,68 +249,73 @@ def reduce_color_array(color_array, color_code_count, target_cluster_count):
     
     return new_color_array
 
-def clean_cartoon_artifacts(color_array, color_code_count, isolation_threshold=8, frequency_threshold=0.001):
+
+def cartoon_color_array(color_array):
+    iso_limit=2
+    stark_diff=135
     """
-    清理卡通图像杂色的独立函数
-    :param color_array: image_to_color_array 返回的 (H, W, 4) 数组
-    :param color_code_count: 颜色计数统计字典
-    :param isolation_threshold: 邻域判定阈值（1-8），越高越严格
-    :param frequency_threshold: 全局频率阈值，低于此比例的颜色将被剔除
+    针对 color_array 的极速清理函数
+    参数:
+        color_array: (H, W, 4) 结构的 numpy 数组 -> [color_code, R, G, B]
+        iso_limit: 5x5邻域内同色数量低于此值则判定为孤立点
+        stark_diff: 细节保护阈值，RGB距离超过此值则不处理（保护瞳孔）.值越大颜色越纯。
+    返回:
+        new_array: 格式与输入完全一致的 (H, W, 4) 数组
     """
     h, w, _ = color_array.shape
-    new_array = color_array.copy()
-    total_pixels = h * w
-
-    # --- 步骤 1: 空间过滤 (消除孤立噪点) ---
-    for y in range(1, h - 1):
-        for x in range(1, w - 1):
-            current_code = color_array[y, x, 0]
-            
-            # 获取周围 8 个格子的颜色编码
-            neighbors = [
-                color_array[y-1, x-1, 0], color_array[y-1, x, 0], color_array[y-1, x+1, 0],
-                color_array[y, x-1, 0],                           color_array[y, x+1, 0],
-                color_array[y+1, x-1, 0], color_array[y+1, x, 0], color_array[y+1, x+1, 0]
-            ]
-            
-            # 如果当前颜色在邻域内出现次数极少
-            if neighbors.count(current_code) < (8 - isolation_threshold + 1):
-                # 找到邻域内最频繁的颜色
-                most_common_code = max(set(neighbors), key=neighbors.count)
-                
-                # 从原 count 字典或邻域像素中获取该颜色的 RGB 信息进行替换
-                for ny in range(y-1, y+2):
-                    for nx in range(x-1, x+2):
-                        if color_array[ny, nx, 0] == list(set(neighbors))[0]: # 简化逻辑，取邻域代表
-                             new_array[y, x] = color_array[ny, nx].copy()
-                             break
-
-    # --- 步骤 2: 频率过滤 (剔除极少数出现的杂色) ---
-    valid_codes = {code for code, info in color_code_count.items() 
-                   if (info['count'] / total_pixels) >= frequency_threshold}
+    # 显式使用 np.copy 确保不修改原始数据
+    new_array = np.copy(color_array)
     
-    if len(valid_codes) < len(color_code_count):
-        for y in range(h):
-            for x in range(w):
-                code = new_array[y, x, 0]
-                if code not in valid_codes:
-                    # 寻找 RGB 距离最近的有效颜色进行替换
-                    curr_rgb = np.array([new_array[y, x, 1], new_array[y, x, 2], new_array[y, x, 3]])
-                    best_code = None
-                    min_dist = float('inf')
-                    
-                    for vc in valid_codes:
-                        v_info = color_code_count[vc]
-                        dist = np.linalg.norm(curr_rgb - np.array([v_info['r'], v_info['g'], v_info['b']]))
-                        if dist < min_dist:
-                            min_dist = dist
-                            best_code = vc
-                    
-                    # 更新数组值
-                    rep = color_code_count[best_code]
-                    new_array[y, x] = [best_code, int(rep['r']), int(rep['g']), int(rep['b'])]
+    # 提取代码层用于极速 4-邻域 比较
+    codes = color_array[:, :, 0]
+    
+    # 5x5 检查半径
+    radius = 2 
+    
+    # 遍历非边缘区域
+    for y in range(radius, h - radius):
+        for x in range(radius, w - radius):
+            current_code = codes[y, x]
+            
+            # 【提速核心】边缘跳过：
+            # 如果中心点与上下左右 4 个格子的 color_code 完全一致，说明在色块内部，直接跳过
+            if (current_code == codes[y-1, x] and current_code == codes[y+1, x] and 
+                current_code == codes[y, x-1] and current_code == codes[y, x+1]):
+                continue
+            
+            # 获取 5x5 邻域数据块 (25, 4)
+            patch = color_array[y-2:y+3, x-2:x+3].reshape(-1, 4)
+            
+            # 移除中心点 (索引为 12)，剩余 24 个邻居
+            neighbors = np.delete(patch, 12, axis=0)
+            neighbor_codes = neighbors[:, 0]
+            
+            # --- 判定 1: 空间孤立检查 ---
+            # 统计邻域内有多少个格子的 code 与当前一致
+            if np.sum(neighbor_codes == current_code) < iso_limit:
+                
+                # --- 判定 2: 细节保护 (NumPy 向量化计算 RGB 距离) ---
+                current_rgb = color_array[y, x, 1:4].astype(float)
+                neighbor_rgbs = neighbors[:, 1:4].astype(float)
+                
+                # 一次性计算当前像素与 24 个邻居的欧氏距离
+                dists = np.linalg.norm(neighbor_rgbs - current_rgb, axis=1)
+                
+                # 如果该像素与周围所有颜色反差都极大 (all > stark_diff)，判定为瞳孔细节，保留
+                if np.all(dists > stark_diff):
+                    continue
+                
+                # --- 判定 3: 杂色替换 (邻域共识投票) ---
+                # 统计邻域内出现频率最高的 color_code
+                vals, counts = np.unique(neighbor_codes, return_counts=True)
+                most_common_code = vals[np.argmax(counts)]
+                
+                # 从邻域数据中提取该 code 对应的第一组完整 [code, R, G, B]
+                replace_idx = np.where(neighbor_codes == most_common_code)[0][0]
+                new_array[y, x] = neighbors[replace_idx]
 
     return new_array
+
 
 def process_image_with_color_code(input_path, output_path, color_db_path, scale_factor=0.03, pixel_scale=20):
     # 生成颜色数组
@@ -328,6 +334,7 @@ def reduce_image_colors(input_path, output_path, color_db_path, scale_factor=0.0
 
 def clean_cartoon_image(input_path, output_path, color_db_path, scale_factor=0.03, pixel_scale=20):
     color_array, color_code_count = image_to_color_array(input_path, color_db_path, scale_factor)
-    color_array = clean_cartoon_artifacts(color_array, color_code_count)
+    color_array = cartoon_color_array(color_array)
     output_img = visualize_color_array(color_array, pixel_scale)
+
     return output_path, output_img
