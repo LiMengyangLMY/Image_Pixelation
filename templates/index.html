@@ -153,7 +153,7 @@
         {% endif %}
         
         <div class="form-section">
-            <form method="POST" enctype="multipart/form-data">
+            <form id="uploadForm" method="POST" enctype="multipart/form-data">
                 <div class="form-group">
                     <label for="file">选择图片文件</label>
                     <input type="file" id="file" name="file" required accept="image/*">
@@ -178,7 +178,7 @@
             </form>
         </div>
         
-        <div class="result-section {% if success %}show{% endif %}">
+        <div id="resultSection" class="result-section {% if success %}show{% endif %}">
             <h2>处理结果</h2>
             {% if success %}
             <div class="image-container">
@@ -200,26 +200,72 @@
     </div>
 
     <script>
-        // 简单的前端交互增强
-        document.addEventListener('DOMContentLoaded', function() {
-            const form = document.querySelector('form');
-            const resultSection = document.querySelector('.result-section');
-            
-            form.addEventListener('submit', function() {
-                // 提交表单时显示加载状态
-                const submitBtn = form.querySelector('button');
-                submitBtn.disabled = true;
-                submitBtn.textContent = '处理中...';
-            });
+    document.addEventListener('DOMContentLoaded', function() {
+        // 1. 复选框显示逻辑
+        const checkbox = document.getElementById('reduce_colors');
+        const colorCountGroup = document.getElementById('color_count_group');
+        checkbox.addEventListener('change', function () {
+            colorCountGroup.style.display = this.checked ? 'block' : 'none';
         });
-        document.addEventListener('DOMContentLoaded', function () {
-            const checkbox = document.getElementById('reduce_colors');
-            const colorCountGroup = document.getElementById('color_count_group');
 
-            checkbox.addEventListener('change', function () {
-                colorCountGroup.style.display = this.checked ? 'block' : 'none';
+        // 2. 核心逻辑：无刷新提交，保留文件状态
+        const form = document.getElementById('uploadForm');
+        const resultSection = document.getElementById('resultSection');
+        const submitBtn = form.querySelector('button');
+
+        form.addEventListener('submit', function(e) {
+            e.preventDefault(); // 【关键】阻止页面默认刷新，文件才不会掉
+
+            // 按钮变为加载状态
+            const originalBtnText = submitBtn.innerText;
+            submitBtn.disabled = true;
+            submitBtn.innerText = '处理中...';
+
+            // 收集表单数据
+            const formData = new FormData(form);
+
+            // 发送请求给后台
+            fetch(window.location.href, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.text())
+            .then(html => {
+                // 解析后台返回的完整 HTML
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+
+                // 提取新生成的"结果区域" HTML
+                const newResult = doc.getElementById('resultSection');
+                
+                // 如果有结果，替换当前页面的结果区域
+                if (newResult) {
+                    resultSection.innerHTML = newResult.innerHTML;
+                    resultSection.classList.add('show'); // 确保显示
+                    
+                    // 重新绑定新结果中的下载按钮事件(如果有特殊逻辑)
+                    // 这里不需要，因为是普通链接
+                }
+
+                // 检查是否有错误提示
+                const errorMsg = doc.querySelector('.error-message');
+                if (errorMsg) {
+                    // 如果你想在结果区显示错误，可以插入进去，或者弹窗
+                    alert(errorMsg.innerText); 
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                alert('请求失败，请检查网络或重试');
+            })
+            .finally(() => {
+                // 恢复按钮
+                submitBtn.disabled = false;
+                submitBtn.innerText = originalBtnText;
             });
         });
+    });
     </script>
+
 </body>
 </html>
