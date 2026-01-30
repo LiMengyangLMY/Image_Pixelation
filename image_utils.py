@@ -248,22 +248,86 @@ def reduce_color_array(color_array, color_code_count, target_cluster_count):
     
     return new_color_array
 
+def clean_cartoon_artifacts(color_array, color_code_count, isolation_threshold=8, frequency_threshold=0.001):
+    """
+    清理卡通图像杂色的独立函数
+    :param color_array: image_to_color_array 返回的 (H, W, 4) 数组
+    :param color_code_count: 颜色计数统计字典
+    :param isolation_threshold: 邻域判定阈值（1-8），越高越严格
+    :param frequency_threshold: 全局频率阈值，低于此比例的颜色将被剔除
+    """
+    h, w, _ = color_array.shape
+    new_array = color_array.copy()
+    total_pixels = h * w
 
-#调用接口：像素化图纸
-def process_image_with_color_code(input_path, output_path, color_db_path, scale_factor=0.03):
-    color_array,color_code_count = image_to_color_array(input_path, color_db_path, scale_factor)
-    pixel_scale = int(1 / scale_factor)
+    # --- 步骤 1: 空间过滤 (消除孤立噪点) ---
+    for y in range(1, h - 1):
+        for x in range(1, w - 1):
+            current_code = color_array[y, x, 0]
+            
+            # 获取周围 8 个格子的颜色编码
+            neighbors = [
+                color_array[y-1, x-1, 0], color_array[y-1, x, 0], color_array[y-1, x+1, 0],
+                color_array[y, x-1, 0],                           color_array[y, x+1, 0],
+                color_array[y+1, x-1, 0], color_array[y+1, x, 0], color_array[y+1, x+1, 0]
+            ]
+            
+            # 如果当前颜色在邻域内出现次数极少
+            if neighbors.count(current_code) < (8 - isolation_threshold + 1):
+                # 找到邻域内最频繁的颜色
+                most_common_code = max(set(neighbors), key=neighbors.count)
+                
+                # 从原 count 字典或邻域像素中获取该颜色的 RGB 信息进行替换
+                for ny in range(y-1, y+2):
+                    for nx in range(x-1, x+2):
+                        if color_array[ny, nx, 0] == list(set(neighbors))[0]: # 简化逻辑，取邻域代表
+                             new_array[y, x] = color_array[ny, nx].copy()
+                             break
+
+    # --- 步骤 2: 频率过滤 (剔除极少数出现的杂色) ---
+    valid_codes = {code for code, info in color_code_count.items() 
+                   if (info['count'] / total_pixels) >= frequency_threshold}
+    
+    if len(valid_codes) < len(color_code_count):
+        for y in range(h):
+            for x in range(w):
+                code = new_array[y, x, 0]
+                if code not in valid_codes:
+                    # 寻找 RGB 距离最近的有效颜色进行替换
+                    curr_rgb = np.array([new_array[y, x, 1], new_array[y, x, 2], new_array[y, x, 3]])
+                    best_code = None
+                    min_dist = float('inf')
+                    
+                    for vc in valid_codes:
+                        v_info = color_code_count[vc]
+                        dist = np.linalg.norm(curr_rgb - np.array([v_info['r'], v_info['g'], v_info['b']]))
+                        if dist < min_dist:
+                            min_dist = dist
+                            best_code = vc
+                    
+                    # 更新数组值
+                    rep = color_code_count[best_code]
+                    new_array[y, x] = [best_code, int(rep['r']), int(rep['g']), int(rep['b'])]
+
+    return new_array
+
+def process_image_with_color_code(input_path, output_path, color_db_path, scale_factor=0.03, pixel_scale=20):
+    # 生成颜色数组
+    color_array, color_code_count = image_to_color_array(input_path, color_db_path, scale_factor)
+    # 使用自定义的像素块尺寸进行渲染
     output_img = visualize_color_array(color_array, pixel_scale)
-    output_img.save(output_path)
-    used_color_codes = set(color_array[:, :, 0].flatten())
-    return output_path, output_img, used_color_codes
+    return output_path, output_img, set(color_array[:, :, 0].flatten())
 
-#调用接口：像素化图纸+减少颜色数量
-def reduce_image_colors(input_path, output_path, color_db_path, scale_factor=0.03,target_color_count=1):
-    color_array,color_code_count = image_to_color_array(input_path, color_db_path, scale_factor)
+def reduce_image_colors(input_path, output_path, color_db_path, scale_factor=0.03, target_color_count=1, pixel_scale=20):
+    color_array, color_code_count = image_to_color_array(input_path, color_db_path, scale_factor)
+    # 聚类减少颜色
     color_array = reduce_color_array(color_array, color_code_count, target_color_count)
-    pixel_scale = int(1 / scale_factor)
+    # 使用自定义的像素块尺寸进行渲染
     output_img = visualize_color_array(color_array, pixel_scale)
-    output_img.save(output_path)
     return output_path, output_img
 
+def clean_cartoon_image(input_path, output_path, color_db_path, scale_factor=0.03, pixel_scale=20):
+    color_array, color_code_count = image_to_color_array(input_path, color_db_path, scale_factor)
+    color_array = clean_cartoon_artifacts(color_array, color_code_count)
+    output_img = visualize_color_array(color_array, pixel_scale)
+    return output_path, output_img

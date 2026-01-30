@@ -5,7 +5,7 @@ from flask import Flask, render_template, request, url_for, send_file
 import os
 import uuid
 from werkzeug.utils import secure_filename
-from image_utils import process_image_with_color_code, reduce_image_colors, load_color_database
+from image_utils import clean_cartoon_image,process_image_with_color_code, reduce_image_colors, load_color_database
 import PIL.Image 
 os.environ["OMP_NUM_THREADS"] = "1"
 # 初始化Flask应用
@@ -21,27 +21,25 @@ app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif', 'bmp'}
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 
-# 辅助函数：检查文件扩展名
 def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
+    """检查文件扩展名是否合法"""
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 
-# Flask路由
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
-
-        # ========= 1. 文件校验 =========
+        # 1. 初始化变量，防止后续引用报错
+        input_path = None 
+        
         if 'file' not in request.files:
-            return render_template('index.html', error="请选择要上传的图片文件")
+            return render_template('index.html', error="请选择文件")
 
         file = request.files['file']
-        if file.filename == '':
-            return render_template('index.html', error="未选择文件")
+        if file.filename == '' or not allowed_file(file.filename):
+            return render_template('index.html', error="文件格式不正确")
 
-        if not (file and allowed_file(file.filename)):
-            return render_template('index.html', error="不支持的文件格式")
-
-        # ========= 2. 保存文件 =========
+        # 2. 保存文件并获取路径
         filename = secure_filename(file.filename)
         unique_id = str(uuid.uuid4())[:8]
         input_filename = f"{unique_id}_{filename}"
@@ -51,55 +49,59 @@ def index():
         output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
         file.save(input_path)
 
-        # ========= 3. 读取参数 =========
+        # 3. 参数处理：计算放缩比例
         try:
-            scale_factor = float(request.form.get('scale_factor', 0.03))
-            color_db_path = request.form.get('color_db_path', 'color_data.csv')
-        except ValueError:
-            return render_template('index.html', error="参数格式错误")
-
-        reduce_colors = request.form.get('reduce_colors') == 'on'
-        color_count = None
-
-        if reduce_colors:
-            try:
-                color_count = int(request.form.get('color_count'))
-            except (TypeError, ValueError):
-                return render_template('index.html', error="请输入有效的颜色数量")
-
-        # ========= 4. Stage 1：生成未减少颜色的图 =========
-        try:
-            from image_utils import process_image_with_color_code
-
-            output_path,full_image, used_color_codes = process_image_with_color_code(
-                input_path,
-                output_path,        
-                color_db_path=color_db_path,
-                scale_factor=scale_factor
-            )
+            # 用户输入的宽度格子数
+            target_width_cells = int(request.form.get('target_width', 40))
+            # 每个格子的显示像素大小
+            pixel_size = int(request.form.get('pixel_size', 20))
+            
+            with PIL.Image.open(input_path) as img:
+                orig_w, _ = img.size
+                # 关键计算：根据目标格子数计算放缩因子
+                # 例如：原图1000px，目标40格，scale = 40/1000 = 0.04
+                calc_scale_factor = target_width_cells / orig_w
+            
+            color_db_path = 'color_data.csv'
         except Exception as e:
-            return render_template('index.html', error=f"图片处理失败：{e}")
+            return render_template('index.html', error=f"参数或图片解析失败: {e}")
 
-        # ========= 5. Stage 2：可选减少颜色 =========
+        # 4. 执行图片处理
+        reduce_is_checked = request.form.get('reduce_colors') == 'on'
+        
         try:
-            if reduce_colors:
-                from image_utils import reduce_image_colors, load_color_database
-
-                output_path,reduced_img = reduce_image_colors(
-                    input_path,
-                    output_path,        
-                    color_db_path,
-                    scale_factor=scale_factor,
-                    target_color_count=color_count
+            # 获取互斥选项的状态
+            is_reduce_on = request.form.get('reduce_colors') == 'on'
+            is_clean_on = request.form.get('clean_cartoon') == 'on'
+            
+            if is_clean_on:
+                # 执行卡通增强清理模式
+                _, processed_img = clean_cartoon_image(
+                    input_path, output_path, color_db_path,
+                    scale_factor=calc_scale_factor,
+                    pixel_scale=pixel_size
                 )
-                reduced_img.save(output_path)
+            elif is_reduce_on:
+                # 执行减少颜色模式
+                target_count = int(request.form.get('color_count', 16))
+                _, processed_img = reduce_image_colors(
+                    input_path, output_path, color_db_path,
+                    scale_factor=calc_scale_factor,
+                    target_color_count=target_count,
+                    pixel_scale=pixel_size
+                )
             else:
-                full_image.save(output_path)
-
+                # 默认基础处理
+                _, processed_img, _ = process_image_with_color_code(
+                    input_path, output_path, color_db_path,
+                    scale_factor=calc_scale_factor,
+                    pixel_scale=pixel_size
+                )
+            
+            processed_img.save(output_path)
         except Exception as e:
-            return render_template('index.html', error=f"减少颜色时出错：{e}")
+            return render_template('index.html', error=f"处理失败: {e}")
 
-        # ========= 6. 返回结果 =========
         return render_template(
             'index.html',
             success=True,
@@ -107,7 +109,6 @@ def index():
             processed_image=url_for('static', filename=f'outputs/{output_filename}')
         )
 
-    # ========= GET =========
     return render_template('index.html')
 
 

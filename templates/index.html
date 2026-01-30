@@ -159,21 +159,38 @@
                     <input type="file" id="file" name="file" required accept="image/*">
                 </div>
                 
-                <div class="form-group">
-                    <label for="scale_factor">放缩因子 (默认: 0.03)</label>
-                    <input type="number" id="scale_factor" name="scale_factor" step="0.01" min="0.01" max="1.0" value="0.03">
+                <div class="form-group" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                    <div>
+                        <label for="target_width">输出宽度 (横向格子数)</label>
+                        <input type="number" id="target_width" name="target_width" value="40" min="1">
+                    </div>
+                    <div>
+                        <label for="pixel_size">单格尺寸</label>
+                        <input type="number" id="pixel_size" name="pixel_size" value="20" min="1">
+                    </div>
                 </div>
-                 <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="reduce_colors" name="reduce_colors">
-                        减少生成图像的颜色种类
+                <div style="background-color: #ffff00; padding: 2px; border-radius: 4px; margin-bottom: 20px; display: inline-block;">
+                <small style="color: #666;">* <strong>高度</strong>将按原图比例自动计算。</small>
+                <small style="color: #666;">* <strong>单格尺寸</strong>越大图纸越清晰。</small>
+                </div>
+
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; margin-bottom: 10px;">
+                        <input type="checkbox" id="reduce_colors" name="reduce_colors" style="width: 18px; height: 18px;">
+                        <span>开启精简颜色模式 </span>
+                    </label>
+                    
+                    <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                        <input type="checkbox" id="clean_cartoon" name="clean_cartoon" style="width: 18px; height: 18px;">
+                        <span>开启卡通增强模式</span>
                     </label>
                 </div>
 
-                <div class="form-group" id="color_count_group" style="display:none;">
+                <div class="form-group" id="color_count_group" style="display:none; margin-left: 28px;">
                     <label for="color_count">目标颜色数量</label>
                     <input type="number" id="color_count" name="color_count" min="1" max="256" value="16">
                 </div>
+
                 <button type="submit">处理图片</button>
             </form>
         </div>
@@ -198,6 +215,32 @@
        
 
     </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const reduceCheckbox = document.getElementById('reduce_colors');
+        const cleanCheckbox = document.getElementById('clean_cartoon');
+        const colorCountGroup = document.getElementById('color_count_group');
+
+        // 互斥逻辑：减少颜色
+        reduceCheckbox.addEventListener('change', function() {
+            if (this.checked) {
+                cleanCheckbox.checked = false; // 取消卡通清理
+                colorCountGroup.style.display = 'block';
+            } else {
+                colorCountGroup.style.display = 'none';
+            }
+        });
+
+        // 互斥逻辑：卡通清理
+        cleanCheckbox.addEventListener('change', function() {
+            if (this.checked) {
+                reduceCheckbox.checked = false; // 取消减少颜色
+                colorCountGroup.style.display = 'none';
+            }
+        });
+    });
+    </script>
 
     <script>
     document.addEventListener('DOMContentLoaded', function() {
