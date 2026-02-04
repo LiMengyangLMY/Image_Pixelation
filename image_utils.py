@@ -3,6 +3,7 @@ import os
 import pandas as pd
 import numpy as np
 import cv2
+from sklearn.cluster import KMeans
 
 """
 函数说明：
@@ -67,12 +68,245 @@ def find_nearest_color(target_rgb, color_database):
     nearest_color = color_data.loc[color_data['distance'].idxmin()]
     return nearest_color['num'], (nearest_color['R'], nearest_color['G'], nearest_color['B'])
 
-from sklearn.cluster import KMeans
+def reduce_color_array(color_array, color_code_count, target_cluster_count):
+    """
+    基于 KMeans 聚类减少颜色种类数量，并同步更新统计字典
+    """
+    target_cluster_count = int(target_cluster_count)
+    codes = list(color_code_count.keys())
+    actual_color_count = len(codes)
+    
+    # 如果目标簇数大于等于实际颜色数，不进行聚类，直接返回
+    if target_cluster_count >= actual_color_count:
+        return color_array, color_code_count
+
+    # 1. 构建 RGB 数据
+    rgb_array = np.array(
+        [[v["r"], v["g"], v["b"]] for v in color_code_count.values()],
+        dtype=int
+    )
+    code_list = list(color_code_count.keys())
+    
+    # 2. KMeans 聚类
+    kmeans = KMeans(n_clusters=target_cluster_count, random_state=0)
+    labels = kmeans.fit_predict(rgb_array)
+    
+    # 3. 计算映射关系与更新统计
+    cluster_to_rep = {}      # 簇ID -> 代表色信息
+    new_color_code_count = {} # 新的统计字典
+    
+    for cluster_id in range(target_cluster_count):
+        # 找到该簇内的所有原始编码
+        cluster_indices = [i for i, l in enumerate(labels) if l == cluster_id]
+        cluster_codes = [code_list[i] for i in cluster_indices]
+
+        # 选取簇内出现次数（count）最多的编码作为代表色
+        rep_code = max(cluster_codes, key=lambda c: color_code_count[c]["count"])
+        rep_info = color_code_count[rep_code]
+
+        # 记录代表色信息
+        rep_data = {
+            "code": rep_code,
+            "r": int(rep_info["r"]),
+            "g": int(rep_info["g"]),
+            "b": int(rep_info["b"])
+        }
+        cluster_to_rep[cluster_id] = rep_data
+        
+        # 汇总该簇所有颜色的计数到代表色中
+        new_color_code_count[rep_code] = {
+            "count": sum(color_code_count[c]["count"] for c in cluster_codes),
+            "r": rep_data["r"],
+            "g": rep_data["g"],
+            "b": rep_data["b"]
+        }
+
+    # 4. 构建旧 code -> 新信息的完整映射表
+    code_replace_map = {}
+    for i, old_code in enumerate(code_list):
+        cluster_id = labels[i]
+        code_replace_map[old_code] = cluster_to_rep[cluster_id]
+
+    # 5. 应用替换到 color_array
+    h, w, _ = color_array.shape
+    new_color_array = np.empty_like(color_array, dtype=object)
+
+    for y in range(h):
+        for x in range(w):
+            old_code = color_array[y, x, 0]
+            rep = code_replace_map[old_code]
+            new_color_array[y, x] = [rep["code"], rep["r"], rep["g"], rep["b"]]
+    
+    return new_color_array, new_color_code_count
+
+def cartoon_color_array(color_array, color_code_count):
+    """
+    针对 color_array 的清理函数（去噪），在处理过程中同步更新 color_code_count
+    """
+    iso_limit = 2      # 孤立点判定阈值
+    stark_diff = 65    # 细节保护阈值
+    
+    h, w, _ = color_array.shape
+    new_array = np.copy(color_array)
+    
+    # 深拷贝一份统计字典用于实时更新
+    updated_counts = {k: v.copy() for k, v in color_code_count.items()}
+    
+    # 提取代码层用于比较
+    codes = color_array[:, :, 0]
+    radius = 2 
+    
+    for y in range(radius, h - radius):
+        for x in range(radius, w - radius):
+            current_code = codes[y, x]
+            
+            # 内部点跳过（上下左右颜色一致则不处理）
+            if (current_code == codes[y-1, x] and current_code == codes[y+1, x] and 
+                current_code == codes[y, x-1] and current_code == codes[y, x+1]):
+                continue
+            
+            # 获取 5x5 邻域
+            patch = color_array[y-2:y+3, x-2:x+3].reshape(-1, 4)
+            neighbors = np.delete(patch, 12, axis=0) # 移除中心点
+            neighbor_codes = neighbors[:, 0]
+            
+            # 判定是否为孤立点
+            if np.sum(neighbor_codes == current_code) < iso_limit:
+                current_rgb = color_array[y, x, 1:4].astype(float)
+                neighbor_rgbs = neighbors[:, 1:4].astype(float)
+                dists = np.linalg.norm(neighbor_rgbs - current_rgb, axis=1)
+                
+                # 如果与周围颜色反差极大，判定为细节（如瞳孔），保留
+                if np.all(dists > stark_diff):
+                    continue
+                
+                # 投票选取邻域内出现频率最高的颜色
+                vals, freq = np.unique(neighbor_codes, return_counts=True)
+                most_common_code = vals[np.argmax(freq)]
+                
+                if current_code != most_common_code:
+                    # --- 核心：在处理过程中更新计数 ---
+                    updated_counts[current_code]["count"] -= 1
+                    updated_counts[most_common_code]["count"] += 1
+                    
+                    # 执行替换：选取邻域中该 code 对应的第一个 RGB 值
+                    replace_idx = np.where(neighbor_codes == most_common_code)[0][0]
+                    new_array[y, x] = neighbors[replace_idx]
+
+    # 移除由于清理导致计数归零的颜色
+    final_counts = {k: v for k, v in updated_counts.items() if v["count"] > 0}
+    
+    return new_array, final_counts
 
 
+    """
+    将 4 维数组可视化为带坐标轴、网格和图例的专业图纸
+    参数：
+        color_array: (H, W, 4) -> [color_code, R, G, B]
+        pixel_scale: 单个像素块边长（建议 30-40 以便容纳文字）
+    """
+    h, w, _ = color_array.shape
+    
+    # --- 1. 参数配置 ---
+    margin = int(pixel_scale * 1.5)  # 坐标轴留白空间
+    legend_height = 80              # 底部图例高度
+    grid_color = (200, 200, 200)    # 细网格颜色
+    major_grid_color = (100, 100, 100) # 5x5粗网格颜色
+    
+    # 最终画布尺寸
+    canvas_w = w * pixel_scale + 2 * margin
+    canvas_h = h * pixel_scale + 2 * margin + legend_height
+    
+    output_img = Image.new("RGB", (canvas_w, canvas_h), "white")
+    draw = ImageDraw.Draw(output_img)
 
-import numpy as np
-from PIL import Image
+    # 加载字体
+    try:
+        # 尝试加载中文字体（如果是Windows环境）或Arial
+        font_code = ImageFont.truetype("arial.ttf", int(pixel_scale * 0.4))
+        font_axis = ImageFont.truetype("arial.ttf", int(pixel_scale * 0.5))
+        font_legend = ImageFont.truetype("arial.ttf", 16)
+    except:
+        font_code = font_axis = font_legend = ImageFont.load_default()
+
+    # --- 2. 统计颜色信息 (用于图例) ---
+    color_stats = {}
+    for y in range(h):
+        for x in range(w):
+            code, r, g, b = color_array[y, x]
+            if code not in color_stats:
+                color_stats[code] = {"rgb": (int(r), int(g), int(b)), "count": 0}
+            color_stats[code]["count"] += 1
+    
+    # --- 3. 绘制主图区域 ---
+    for y in range(h):
+        for x in range(w):
+            color_code, r, g, b = color_array[y, x]
+            
+            # 填充色块
+            rect_l = margin + x * pixel_scale
+            rect_t = margin + y * pixel_scale
+            rect_r = rect_l + pixel_scale
+            rect_b = rect_t + pixel_scale
+            
+            draw.rectangle([rect_l, rect_t, rect_r, rect_b], fill=(r, g, b))
+            
+            # 绘制颜色编码 (计算对比色防止看不清)
+            text_color = (255, 255, 255) if (r*0.299 + g*0.587 + b*0.114) < 128 else (0, 0, 0)
+            draw.text(((rect_l + rect_r)/2, (rect_t + rect_b)/2), 
+                      str(color_code), fill=text_color, font=font_code, anchor="mm")
+
+    # --- 4. 绘制网格线 ---
+    # 绘制垂直线
+    for x in range(w + 1):
+        line_x = margin + x * pixel_scale
+        width = 2 if x % 5 == 0 else 1
+        color = major_grid_color if x % 5 == 0 else grid_color
+        draw.line([(line_x, margin), (line_x, margin + h * pixel_scale)], fill=color, width=width)
+        
+        # 绘制横向坐标序号 (顶部和底部)
+        if x < w:
+            axis_x = margin + x * pixel_scale + pixel_scale // 2
+            draw.text((axis_x, margin // 2), str(x + 1), fill="black", font=font_axis, anchor="mm")
+            draw.text((axis_x, margin + h * pixel_scale + margin // 2), str(x + 1), fill="black", font=font_axis, anchor="mm")
+
+    # 绘制水平线
+    for y in range(h + 1):
+        line_y = margin + y * pixel_scale
+        width = 2 if y % 5 == 0 else 1
+        color = major_grid_color if y % 5 == 0 else grid_color
+        draw.line([(margin, line_y), (margin + w * pixel_scale, line_y)], fill=color, width=width)
+        
+        # 绘制纵向坐标序号 (左侧和右侧)
+        if y < h:
+            axis_y = margin + y * pixel_scale + pixel_scale // 2
+            draw.text((margin // 2, axis_y), str(y + 1), fill="black", font=font_axis, anchor="mm")
+            draw.text((margin + w * pixel_scale + margin // 2, axis_y), str(y + 1), fill="black", font=font_axis, anchor="mm")
+
+    # --- 5. 绘制底部图例 ---
+    legend_start_y = margin * 2 + h * pixel_scale
+    current_legend_x = margin
+    
+    for code in sorted(color_stats.keys()):
+        info = color_stats[code]
+        # 绘制小色块
+        box_size = 20
+        draw.rectangle([current_legend_x, legend_start_y, 
+                        current_legend_x + box_size, legend_start_y + box_size], 
+                       fill=info["rgb"], outline="black")
+        
+        # 绘制文本: 编码 (数量)
+        legend_text = f"{code}  ({info['count']})"
+        draw.text((current_legend_x + box_size + 5, legend_start_y + box_size // 2), 
+                  legend_text, fill="black", font=font_legend, anchor="lm")
+        
+        # 移动到下一个图例位置（简单水平排列）
+        current_legend_x += 100 
+        if current_legend_x > canvas_w - 100: # 换行处理
+            current_legend_x = margin
+            legend_start_y += 30
+
+    return output_img
 
 def image_to_color_array(input_path, color_db_path, scale_factor=0.03):
     """
@@ -118,9 +352,6 @@ def image_to_color_array(input_path, color_db_path, scale_factor=0.03):
     return color_array,color_code_count
 
 
-from PIL import Image, ImageDraw, ImageFont
-
-def visualize_color_array(color_array, pixel_scale):
     """
     将 4 维数组可视化为图片
     
@@ -168,10 +399,7 @@ def visualize_color_array(color_array, pixel_scale):
 
     return output_img
 
-import numpy as np
-from sklearn.cluster import KMeans
 
-def reduce_color_array(color_array, color_code_count, target_cluster_count):
     """
     基于 color_code_count 的 RGB 聚类，减少颜色种类数量
     """
@@ -250,9 +478,9 @@ def reduce_color_array(color_array, color_code_count, target_cluster_count):
     return new_color_array
 
 
-def cartoon_color_array(color_array):
+
     iso_limit=2
-    stark_diff=135
+    stark_diff=65
     """
     针对 color_array 的极速清理函数
     参数:
@@ -317,24 +545,131 @@ def cartoon_color_array(color_array):
     return new_array
 
 
+def visualize_color_array(color_array, color_code_count, pixel_scale=30):
+    """
+    将 4 维数组可视化。
+    
+    参数：
+        color_array: (H, W, 4) -> [color_code, R, G, B]
+        color_code_count: 颜色统计字典，由上游处理函数提供
+        pixel_scale: 单个像素块边长
+    """
+    h, w, _ = color_array.shape
+    
+    # --- 1. 参数与动态布局配置 ---
+    margin = int(pixel_scale * 1.5)  # 坐标轴数字留白
+    
+    # 动态计算图例高度
+    legend_box_width = 120           # 每个图例占用的宽度
+    legend_line_height = 40          # 每行图例的高度
+    cols_per_row = max(1, (w * pixel_scale) // legend_box_width) # 每行显示的图例数
+    num_colors = len(color_code_count)
+    num_rows = (num_colors + cols_per_row - 1) // cols_per_row   # 计算需要多少行
+    
+    legend_padding = 40              # 图例与主图的间距
+    legend_total_height = num_rows * legend_line_height + legend_padding
+    
+    canvas_w = w * pixel_scale + 2 * margin
+    canvas_h = h * pixel_scale + 2 * margin + legend_total_height
+    
+    output_img = Image.new("RGB", (canvas_w, canvas_h), "white")
+    draw = ImageDraw.Draw(output_img)
+
+    # 加载字体
+    try:
+        font_code = ImageFont.truetype("arial.ttf", int(pixel_scale * 0.4))
+        font_axis = ImageFont.truetype("arial.ttf", int(pixel_scale * 0.5))
+        font_legend = ImageFont.truetype("arial.ttf", 16)
+    except:
+        font_code = font_axis = font_legend = ImageFont.load_default()
+
+    # --- 2. 绘制主图区域 ---
+    for y in range(h):
+        for x in range(w):
+            color_code, r, g, b = color_array[y, x]
+            
+            rect_l = margin + x * pixel_scale
+            rect_t = margin + y * pixel_scale
+            rect_r = rect_l + pixel_scale
+            rect_b = rect_t + pixel_scale
+            
+            # 填充色块
+            draw.rectangle([rect_l, rect_t, rect_r, rect_b], fill=(r, g, b))
+            
+            # 智能文字对比色 (亮度算法)
+            text_color = (255, 255, 255) if (r*0.299 + g*0.587 + b*0.114) < 128 else (0, 0, 0)
+            draw.text(((rect_l + rect_r)/2, (rect_t + rect_b)/2), 
+                      str(color_code), fill=text_color, font=font_code, anchor="mm")
+
+    # --- 3. 绘制网格与坐标轴 ---
+    grid_color = (220, 220, 220)
+    major_grid_color = (120, 120, 120)
+
+    # 垂直方向
+    for x in range(w + 1):
+        lx = margin + x * pixel_scale
+        draw.line([(lx, margin), (lx, margin + h * pixel_scale)], 
+                  fill=major_grid_color if x % 5 == 0 else grid_color, 
+                  width=2 if x % 5 == 0 else 1)
+        if x < w:
+            ax = margin + x * pixel_scale + pixel_scale // 2
+            draw.text((ax, margin // 2), str(x + 1), fill="black", font=font_axis, anchor="mm")
+            draw.text((ax, margin + h * pixel_scale + margin // 2), str(x + 1), fill="black", font=font_axis, anchor="mm")
+
+    # 水平方向
+    for y in range(h + 1):
+        ly = margin + y * pixel_scale
+        draw.line([(margin, ly), (margin + w * pixel_scale, ly)], 
+                  fill=major_grid_color if y % 5 == 0 else grid_color, 
+                  width=2 if y % 5 == 0 else 1)
+        if y < h:
+            ay = margin + y * pixel_scale + pixel_scale // 2
+            draw.text((margin // 2, ay), str(y + 1), fill="black", font=font_axis, anchor="mm")
+            draw.text((margin + w * pixel_scale + margin // 2, ay), str(y + 1), fill="black", font=font_axis, anchor="mm")
+
+    # --- 4. 动态绘制图例 ---
+    legend_start_y = margin * 2 + h * pixel_scale + 10
+    sorted_codes = sorted(color_code_count.keys())
+    
+    for i, code in enumerate(sorted_codes):
+        info = color_code_count[code]
+        row = i // cols_per_row
+        col = i % cols_per_row
+        
+        item_x = margin + col * legend_box_width
+        item_y = legend_start_y + row * legend_line_height
+        
+        # 颜色块
+        box_s = 22
+        draw.rectangle([item_x, item_y, item_x + box_s, item_y + box_s], 
+                       fill=(int(info['r']), int(info['g']), int(info['b'])), 
+                       outline="black")
+        
+        # 文字说明: 编码 (数量)
+        legend_txt = f"{code} ({info['count']})"
+        draw.text((item_x + box_s + 6, item_y + box_s // 2), 
+                  legend_txt, fill="black", font=font_legend, anchor="lm")
+
+    return output_img
+
 def process_image_with_color_code(input_path, output_path, color_db_path, scale_factor=0.03, pixel_scale=20):
     # 生成颜色数组
     color_array, color_code_count = image_to_color_array(input_path, color_db_path, scale_factor)
     # 使用自定义的像素块尺寸进行渲染
-    output_img = visualize_color_array(color_array, pixel_scale)
+    output_img = visualize_color_array(color_array,color_code_count, pixel_scale)
     return output_path, output_img, set(color_array[:, :, 0].flatten())
 
 def reduce_image_colors(input_path, output_path, color_db_path, scale_factor=0.03, target_color_count=1, pixel_scale=20):
     color_array, color_code_count = image_to_color_array(input_path, color_db_path, scale_factor)
     # 聚类减少颜色
-    color_array = reduce_color_array(color_array, color_code_count, target_color_count)
+    color_array, color_code_count = reduce_color_array(color_array, color_code_count, target_color_count)
     # 使用自定义的像素块尺寸进行渲染
-    output_img = visualize_color_array(color_array, pixel_scale)
+    output_img = visualize_color_array(color_array, color_code_count,pixel_scale)
     return output_path, output_img
 
 def clean_cartoon_image(input_path, output_path, color_db_path, scale_factor=0.03, pixel_scale=20):
     color_array, color_code_count = image_to_color_array(input_path, color_db_path, scale_factor)
-    color_array = cartoon_color_array(color_array)
-    output_img = visualize_color_array(color_array, pixel_scale)
+    color_array, color_code_count = cartoon_color_array(color_array, color_code_count)
+    output_img = visualize_color_array(color_array,color_code_count, pixel_scale)
 
     return output_path, output_img
