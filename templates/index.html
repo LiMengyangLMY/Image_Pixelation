@@ -181,8 +181,8 @@
                     </label>
                     
                     <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                        <input type="checkbox" id="clean_cartoon" name="clean_cartoon" style="width: 18px; height: 18px;">
-                        <span>开启卡通增强模式</span>
+                        <input type="checkbox" id="reduce_colors_Pro" name="reduce_colors_Pro" style="width: 18px; height: 18px;">
+                        <span>开启精简颜色Pro模式</span>
                     </label>
                 </div>
 
@@ -216,99 +216,95 @@
 
     </div>
 
-    <script>
+  <script>
     document.addEventListener('DOMContentLoaded', function() {
-        const reduceCheckbox = document.getElementById('reduce_colors');
-        const cleanCheckbox = document.getElementById('clean_cartoon');
-        const colorCountGroup = document.getElementById('color_count_group');
+    const form = document.getElementById('uploadForm');
+    const fileInput = document.getElementById('file');
+    const reduceCheckbox = document.getElementById('reduce_colors');
+    const reduceProCheckbox = document.getElementById('reduce_colors_Pro');
+    const colorCountGroup = document.getElementById('color_count_group');
+    const resultSection = document.getElementById('resultSection');
+    const submitBtn = form.querySelector('button');
 
-        // 互斥逻辑：减少颜色
-        reduceCheckbox.addEventListener('change', function() {
-            if (this.checked) {
-                cleanCheckbox.checked = false; // 取消卡通清理
-                colorCountGroup.style.display = 'block';
-            } else {
-                colorCountGroup.style.display = 'none';
-            }
-        });
+    // 用于持久化记录用户选择的文件
+    let lastSelectedFile = null;
 
-        // 互斥逻辑：卡通清理
-        cleanCheckbox.addEventListener('change', function() {
-            if (this.checked) {
-                reduceCheckbox.checked = false; // 取消减少颜色
-                colorCountGroup.style.display = 'none';
+    // --- 1. 互斥与显示逻辑 ---
+    function updateColorGroup() {
+        colorCountGroup.style.display = (reduceCheckbox.checked || reduceProCheckbox.checked) ? 'block' : 'none';
+    }
+
+    reduceCheckbox.addEventListener('change', function() {
+        if (this.checked) reduceProCheckbox.checked = false;
+        updateColorGroup();
+    });
+
+    reduceProCheckbox.addEventListener('change', function() {
+        if (this.checked) reduceCheckbox.checked = false;
+        updateColorGroup();
+    });
+
+    // --- 2. 文件状态记录 ---
+    fileInput.addEventListener('change', function() {
+        if (this.files && this.files[0]) {
+            lastSelectedFile = this.files[0];
+            console.log("已记录文件:", lastSelectedFile.name);
+        }
+    });
+
+    // --- 3. 核心 AJAX 提交逻辑 ---
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+
+        // 验证文件：如果 input 为空但我们有记录，则可以使用
+        if (!fileInput.files[0] && !lastSelectedFile) {
+            alert("请先选择一张图片");
+            return;
+        }
+
+        // 显示加载状态
+        const originalBtnText = submitBtn.innerText;
+        submitBtn.disabled = true;
+        submitBtn.innerText = '正在处理中...';
+
+        const formData = new FormData(form);
+        
+        // 【关键】如果没有新选文件，把记录的旧文件塞进去
+        if (!fileInput.files[0] && lastSelectedFile) {
+            formData.set('file', lastSelectedFile);
+        }
+
+        fetch(window.location.href, {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.text())
+        .then(html => {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const newResult = doc.getElementById('resultSection');
+            
+            if (newResult) {
+                resultSection.innerHTML = newResult.innerHTML;
+                resultSection.classList.add('show');
+                // 自动滚动到结果区
+                resultSection.scrollIntoView({ behavior: 'smooth' });
             }
+
+            const errorMsg = doc.querySelector('.error-message');
+            if (errorMsg) alert(errorMsg.innerText);
+        })
+        .catch(err => {
+            console.error(err);
+            alert('处理失败，请稍后重试');
+        })
+        .finally(() => {
+            submitBtn.disabled = false;
+            submitBtn.innerText = originalBtnText;
         });
     });
-    </script>
-
-    <script>
-    document.addEventListener('DOMContentLoaded', function() {
-        // 1. 复选框显示逻辑
-        const checkbox = document.getElementById('reduce_colors');
-        const colorCountGroup = document.getElementById('color_count_group');
-        checkbox.addEventListener('change', function () {
-            colorCountGroup.style.display = this.checked ? 'block' : 'none';
-        });
-
-        // 2. 核心逻辑：无刷新提交，保留文件状态
-        const form = document.getElementById('uploadForm');
-        const resultSection = document.getElementById('resultSection');
-        const submitBtn = form.querySelector('button');
-
-        form.addEventListener('submit', function(e) {
-            e.preventDefault(); // 【关键】阻止页面默认刷新，文件才不会掉
-
-            // 按钮变为加载状态
-            const originalBtnText = submitBtn.innerText;
-            submitBtn.disabled = true;
-            submitBtn.innerText = '处理中...';
-
-            // 收集表单数据
-            const formData = new FormData(form);
-
-            // 发送请求给后台
-            fetch(window.location.href, {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.text())
-            .then(html => {
-                // 解析后台返回的完整 HTML
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(html, 'text/html');
-
-                // 提取新生成的"结果区域" HTML
-                const newResult = doc.getElementById('resultSection');
-                
-                // 如果有结果，替换当前页面的结果区域
-                if (newResult) {
-                    resultSection.innerHTML = newResult.innerHTML;
-                    resultSection.classList.add('show'); // 确保显示
-                    
-                    // 重新绑定新结果中的下载按钮事件(如果有特殊逻辑)
-                    // 这里不需要，因为是普通链接
-                }
-
-                // 检查是否有错误提示
-                const errorMsg = doc.querySelector('.error-message');
-                if (errorMsg) {
-                    // 如果你想在结果区显示错误，可以插入进去，或者弹窗
-                    alert(errorMsg.innerText); 
-                }
-            })
-            .catch(err => {
-                console.error(err);
-                alert('请求失败，请检查网络或重试');
-            })
-            .finally(() => {
-                // 恢复按钮
-                submitBtn.disabled = false;
-                submitBtn.innerText = originalBtnText;
-            });
-        });
-    });
-    </script>
+});
+  </script>
 
 </body>
 </html>

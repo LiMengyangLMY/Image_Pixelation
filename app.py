@@ -5,7 +5,7 @@ from flask import Flask, render_template, request, url_for, send_file
 import os
 import uuid
 from werkzeug.utils import secure_filename
-from image_utils import clean_cartoon_image,process_image_with_color_code, reduce_image_colors, load_color_database
+from image_utils import reduce_image_colors_Pro,process_image_with_color_code, reduce_image_colors, load_color_database
 import PIL.Image 
 os.environ["OMP_NUM_THREADS"] = "1"
 # 初始化Flask应用
@@ -72,13 +72,15 @@ def index():
         try:
             # 获取互斥选项的状态
             is_reduce_on = request.form.get('reduce_colors') == 'on'
-            is_clean_on = request.form.get('clean_cartoon') == 'on'
+            is_reduce_Pro_on = request.form.get('reduce_colors_Pro') == 'on'
             
-            if is_clean_on:
-                # 执行卡通增强清理模式
-                _, processed_img = clean_cartoon_image(
+            if is_reduce_Pro_on:
+                # 执行减少颜色Pro模式
+                target_count = int(request.form.get('color_count', 16))
+                _, processed_img = reduce_image_colors_Pro(
                     input_path, output_path, color_db_path,
                     scale_factor=calc_scale_factor,
+                    target_color_count=target_count,
                     pixel_scale=pixel_size
                 )
             elif is_reduce_on:

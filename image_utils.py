@@ -139,7 +139,7 @@ def reduce_color_array(color_array, color_code_count, target_cluster_count):
     
     return new_color_array, new_color_code_count
 
-def cartoon_color_array(color_array, color_code_count):
+
     """
     针对 color_array 的清理函数（去噪），在处理过程中同步更新 color_code_count
     """
@@ -307,6 +307,117 @@ def cartoon_color_array(color_array, color_code_count):
             legend_start_y += 30
 
     return output_img
+
+import numpy as np
+
+def find_nearest_non_rare_color(target_rgb, non_rare_rgb_list):
+    """
+    辅助函数：在非稀有色预存列表中找到与目标 RGB 最接近的颜色。
+    """
+    min_dist = float('inf')
+    best_match = None
+    for item in non_rare_rgb_list:
+        dist = np.linalg.norm(target_rgb - item['rgb'])
+        if dist < min_dist:
+            min_dist = dist
+            best_match = item
+    
+    if best_match:
+        return [
+            best_match['code'], 
+            int(best_match['rgb'][0]), 
+            int(best_match['rgb'][1]), 
+            int(best_match['rgb'][2])
+        ]
+    return None
+
+def reduce_color_Pro_array(color_array, color_code_count, dist_threshold=200):
+    """
+    逻辑进阶版：
+    (1) 过滤邻域：替换时跳过其他稀有色，确保只替换为非稀有色。
+    (2) 强制清零：若邻域无合适颜色，强制全局匹配，确保稀有色最终数量为 0。
+    (3) 实时更新：同步更新 color_code_count。
+    """
+    h, w, _ = color_array.shape
+    total_pixels = h * w
+    threshold_limit = total_pixels * 0.02
+    
+    # 1. 统计与初始化
+    final_counts = {k: v.copy() for k, v in color_code_count.items()}
+    
+    # 确定初始稀有色集合
+    rare_codes = {code for code, info in final_counts.items() if info["count"] < threshold_limit}
+    non_rare_codes = {code for code, info in final_counts.items() if info["count"] >= threshold_limit}
+    
+    # 安全兜底：如果没找到非稀有色（阈值太高），取出现频率最高的颜色作为基准
+    if not non_rare_codes:
+        most_common = max(final_counts.keys(), key=lambda k: final_counts[k]['count'])
+        non_rare_codes = {most_common}
+
+    # 预存非稀有色的 RGB 列表以加速匹配
+    non_rare_rgb_list = [
+        {
+            'code': code, 
+            'rgb': np.array([final_counts[code]['r'], final_counts[code]['g'], final_counts[code]['b']], dtype=float)
+        } for code in non_rare_codes
+    ]
+
+    new_array = np.copy(color_array)
+    # 8个方向的偏移量
+    directions = [(-1,-1), (-1,0), (-1,1), (0,-1), (0,1), (1,-1), (1,0), (1,1)]
+
+    for y in range(h):
+        for x in range(w):
+            current_code = new_array[y, x, 0]
+            
+            # 仅处理稀有色
+            if current_code in rare_codes:
+                current_rgb = new_array[y, x, 1:4].astype(float)
+                
+                # 寻找合法的邻居（必须是非稀有色）
+                valid_neighbor_data = []
+                for dy, dx in directions:
+                    ny, nx = y + dy, x + dx
+                    if 0 <= ny < h and 0 <= nx < w:
+                        n_pixel = new_array[ny, nx]
+                        n_code = n_pixel[0]
+                        
+                        # 逻辑(1)：跳过另一个稀有色
+                        if n_code in rare_codes:
+                            continue
+                        
+                        dist = np.linalg.norm(current_rgb - n_pixel[1:4].astype(float))
+                        valid_neighbor_data.append({
+                            'code': n_code, 
+                            'dist': dist, 
+                            'full': n_pixel
+                        })
+                
+                # 确定替换目标
+                target_replace_data = None
+                
+                # 判定：如果邻域内没有非稀有色，或者邻域颜色距离都太远
+                if not valid_neighbor_data or all(d['dist'] > dist_threshold for d in valid_neighbor_data):
+                    # 逻辑(2)的一部分：强制去全局非稀有色库找，确保一定能换掉
+                    target_replace_data = find_nearest_non_rare_color(current_rgb, non_rare_rgb_list)
+                else:
+                    # 在非稀有邻居中找最接近的一个
+                    target_replace_data = min(valid_neighbor_data, key=lambda d: d['dist'])['full']
+                
+                # 执行替换与计数更新
+                if target_replace_data is not None:
+                    new_code = target_replace_data[0]
+                    # 更新图像数组
+                    new_array[y, x] = target_replace_data
+                    
+                    # 逻辑(3)：更新计数
+                    final_counts[current_code]["count"] -= 1
+                    final_counts[new_code]["count"] += 1
+
+    # 最后移除所有计数为 0 的颜色（逻辑(2)的最终保证）
+    final_counts = {k: v for k, v in final_counts.items() if v["count"] > 0}
+    
+    return new_array, final_counts
 
 def image_to_color_array(input_path, color_db_path, scale_factor=0.03):
     """
@@ -667,9 +778,10 @@ def reduce_image_colors(input_path, output_path, color_db_path, scale_factor=0.0
     output_img = visualize_color_array(color_array, color_code_count,pixel_scale)
     return output_path, output_img
 
-def clean_cartoon_image(input_path, output_path, color_db_path, scale_factor=0.03, pixel_scale=20):
+def reduce_image_colors_Pro(input_path, output_path, color_db_path, scale_factor=0.03,target_color_count=1,pixel_scale=20):
     color_array, color_code_count = image_to_color_array(input_path, color_db_path, scale_factor)
-    color_array, color_code_count = cartoon_color_array(color_array, color_code_count)
+    color_array, color_code_count = reduce_color_array(color_array, color_code_count, target_color_count)
+    color_array, color_code_count = reduce_color_Pro_array(color_array, color_code_count)
     output_img = visualize_color_array(color_array,color_code_count, pixel_scale)
 
     return output_path, output_img
