@@ -9,12 +9,24 @@
         .main-container { display: flex; flex: 1; overflow: hidden; }
         #canvas-area { flex: 1; overflow: auto; background: #555; padding: 30px; display: flex; align-items: flex-start; justify-content: center; }
         canvas { background: #fff; box-shadow: 0 0 20px rgba(0,0,0,0.3); cursor: crosshair; }
-        .sidebar { width: 320px; background: white; border-left: 1px solid #ddd; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; }
-        .swatch-item { width: 35px; height: 35px; margin: 3px; border: 1px solid #ccc; cursor: pointer; display: inline-block; border-radius: 4px; transition: transform 0.1s; }
-        .swatch-item:hover { transform: scale(1.1); border-color: #000; }
-        .swatch-item.active { border: 3px solid #0d6efd; box-shadow: 0 0 5px rgba(13,110,253,0.5); }
-        .info-panel { background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #eee; }
-        .btn-group-custom { display: flex; gap: 10px; margin-top: 10px; }
+        .sidebar { width: 340px; background: white; border-left: 1px solid #ddd; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; }
+        
+        /* 步骤样式 */
+        .step-box { background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #eee; }
+        .step-title { font-size: 0.9rem; font-weight: bold; color: #666; margin-bottom: 12px; display: flex; align-items: center; }
+        .step-num { background: #0d6efd; color: white; width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; margin-right: 8px; }
+        
+        /* 调色盘布局优化 */
+        .palette-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(45px, 1fr)); gap: 10px; max-height: 250px; overflow-y: auto; padding: 5px; }
+        .swatch-wrapper { display: flex; flex-direction: column; align-items: center; cursor: pointer; }
+        .swatch-item { width: 40px; height: 35px; border: 1px solid #ccc; border-radius: 4px; transition: all 0.1s; position: relative; }
+        .swatch-id { font-size: 10px; color: #666; margin-top: 2px; font-weight: bold; }
+        
+        .swatch-wrapper:hover .swatch-item { transform: scale(1.1); border-color: #000; }
+        .swatch-wrapper.active .swatch-item { border: 3px solid #0d6efd; box-shadow: 0 0 5px rgba(13,110,253,0.5); }
+        .swatch-wrapper.active .swatch-id { color: #0d6efd; }
+        
+        .mode-btn-group .btn { flex: 1; }
     </style>
 </head>
 <body>
@@ -35,47 +47,56 @@
     </div>
 
     <div class="sidebar">
-        <div class="info-panel">
-            <h6>当前选中格子</h6>
-            <div class="small">坐标: <span id="info-pos" class="fw-bold">未选择</span></div>
-            <div class="small">当前编号: <span id="info-id" class="fw-bold">-</span></div>
-            <div id="info-color-preview" class="mt-2" style="height: 20px; width: 100%; border-radius: 3px; display: none; border: 1px solid #ddd;"></div>
+        <div class="step-box">
+            <div class="step-title"><span class="step-num">1</span> 选择修改模式</div>
+            <div class="btn-group mode-btn-group w-100" role="group">
+                <input type="radio" class="btn-check" name="mode" id="mode1" onclick="setMode('single')" checked>
+                <label class="btn btn-outline-primary btn-sm" for="mode1">单格替换</label>
+                
+                <input type="radio" class="btn-check" name="mode" id="mode2" onclick="setMode('batch')">
+                <label class="btn btn-outline-primary btn-sm" for="mode2">同色全换</label>
+            </div>
         </div>
 
-        <h6>选择替换色号:</h6>
-        <div id="palette-list" class="mb-3 d-flex flex-wrap" style="max-height: 300px; overflow-y: auto; align-content: flex-start;">
-            {% for id, rgb in palette.items() %}
-            <div class="swatch-item" 
-                 style="background: rgb({{rgb[0]}},{{rgb[1]}},{{rgb[2]}});" 
-                 title="色号: {{id}}" 
-                 onclick="setTarget('{{id}}', [{{rgb[0]}},{{rgb[1]}},{{rgb[2]}}], this)">
+        <div class="step-box">
+            <div class="step-title"><span class="step-num">2</span> 选择目标色号</div>
+            <div id="palette-list" class="palette-container">
+                {% for id, rgb in palette.items() %}
+                <div class="swatch-wrapper" onclick="setTarget('{{id}}', [{{rgb[0]}},{{rgb[1]}},{{rgb[2]}}], this)">
+                    <div class="swatch-item" style="background: rgb({{rgb[0]}},{{rgb[1]}},{{rgb[2]}});" title="色号: {{id}}"></div>
+                    <div class="swatch-id">{{id}}</div>
+                </div>
+                {% endfor %}
             </div>
-            {% endfor %}
+            <div class="mt-3 p-2 border-top text-center">
+                <small class="text-muted">当前锁定色号: </small>
+                <span id="target-id-display" class="badge bg-primary fs-6">未选择</span>
+            </div>
+        </div>
+
+        <div class="step-box border-primary shadow-sm">
+            <div class="step-title text-primary"><span class="step-num">3</span> 点击图纸应用</div>
+            <p class="small text-muted mb-0">在画布点击任意方格，程序将根据模式自动完成替换。</p>
         </div>
 
         <div class="mt-auto">
-            <p class="small text-muted">目标色号: <span id="target-id-display" class="text-primary fw-bold">未选择</span></p>
-            <div class="d-grid gap-2">
-                <button class="btn btn-primary" onclick="execUpdate('single')">修改当前格</button>
-                <button class="btn btn-danger" onclick="execUpdate('batch')">全图替换此色号</button>
-                <hr>
-                <a href="/" class="btn btn-outline-secondary btn-sm text-center">返回首页</a>
-            </div>
+            <hr>
+            <a href="/" class="btn btn-outline-secondary btn-sm w-100">返回首页</a>
         </div>
     </div>
 </div>
 
 <script>
-    // 数据初始化 (由后端注入)
-    // grid 结构为 [row][col][code, r, g, b]
+    // 后端注入数据
     const grid = {{ grid|tojson }};
     let cellSize = 30; 
-    let selected = { r: -1, c: -1 };
+    let editMode = 'single'; 
     let targetData = { id: null, rgb: [0, 0, 0] };
 
     const canvas = document.getElementById('mainCanvas');
     const ctx = canvas.getContext('2d');
 
+    // 渲染画布
     function render() {
         if (!grid || grid.length === 0) return;
         const rows = grid.length;
@@ -83,88 +104,72 @@
         
         canvas.width = cols * cellSize;
         canvas.height = rows * cellSize;
-
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         for (let r = 0; r < rows; r++) {
             for (let c = 0; c < cols; c++) {
-                // 解构数据：[编号, R, G, B]
                 const [code, rv, gv, bv] = grid[r][c];
 
-                // 1. 填充背景颜色
+                // 填充颜色
                 ctx.fillStyle = `rgb(${rv}, ${gv}, ${bv})`;
                 ctx.fillRect(c * cellSize, r * cellSize, cellSize, cellSize);
 
-                // 2. 绘制网格线
+                // 网格线
                 ctx.strokeStyle = "rgba(0,0,0,0.1)";
-                ctx.lineWidth = 1;
                 ctx.strokeRect(c * cellSize, r * cellSize, cellSize, cellSize);
 
-                // 3. 绘制编号文字 (只在格子足够大时绘制)
+                // 绘制编号
                 if (cellSize > 12) {
                     const brightness = (rv * 299 + gv * 587 + bv * 114) / 1000;
                     ctx.fillStyle = brightness > 128 ? "#000000" : "#ffffff";
-                    
                     ctx.font = `bold ${cellSize * 0.35}px Arial`;
                     ctx.textAlign = "center";
                     ctx.textBaseline = "middle";
                     ctx.fillText(code, c * cellSize + cellSize / 2, r * cellSize + cellSize / 2);
                 }
-
-                // 4. 选中框效果
-                if (selected.r === r && selected.c === c) {
-                    ctx.strokeStyle = "#ff4757";
-                    ctx.lineWidth = 3;
-                    ctx.strokeRect(c * cellSize + 2, r * cellSize + 2, cellSize - 4, cellSize - 4);
-                }
             }
         }
     }
 
-    // 画布点击交互
-    canvas.onclick = (e) => {
-        const rect = canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        
-        selected.c = Math.floor(x / cellSize);
-        selected.r = Math.floor(y / cellSize);
-        
-        const cellData = grid[selected.r][selected.c];
-        const [code, r, g, b] = cellData;
+    function setMode(mode) {
+        editMode = mode;
+    }
 
-        // 更新侧边栏显示
-        document.getElementById('info-pos').innerText = `${selected.r}, ${selected.c}`;
-        document.getElementById('info-id').innerText = code;
-        const preview = document.getElementById('info-color-preview');
-        preview.style.display = 'block';
-        preview.style.backgroundColor = `rgb(${r},${g},${b})`;
-        
-        render();
-    };
-
-    // 选中目标色号
     function setTarget(id, rgb, el) {
         targetData.id = id;
         targetData.rgb = rgb;
-        document.querySelectorAll('.swatch-item').forEach(s => s.classList.remove('active'));
+        // 切换高亮类名
+        document.querySelectorAll('.swatch-wrapper').forEach(w => w.classList.remove('active'));
         el.classList.add('active');
         document.getElementById('target-id-display').innerText = id;
     }
 
-    // 执行修改
-    async function execUpdate(type) {
-        if (!targetData.id || selected.r === -1) {
-            alert("请先在画布选择格子，并从右侧点击目标色号！");
+    // 画布交互核心逻辑
+    canvas.onclick = async (e) => {
+        if (!targetData.id) {
+            alert("请先执行第二步：选择目标色号！");
             return;
         }
 
-        const currentCell = grid[selected.r][selected.c];
-        const oldId = currentCell[0];
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
         
-        const path = type === 'single' ? '/api/update_pixel' : '/api/batch_update';
-        const body = type === 'single' ? 
-            { r: selected.r, c: selected.c, new_id: targetData.id } : 
+        const col = Math.floor(x / cellSize);
+        const row = Math.floor(y / cellSize);
+        
+        if (row >= grid.length || col >= grid[0].length) return;
+
+        const currentCell = grid[row][col];
+        const oldId = currentCell[0];
+
+        // 避免重复点击同一颜色
+        if (oldId === targetData.id) return;
+
+        // 根据模式决定 API 路径
+        const path = editMode === 'single' ? '/api/update_pixel' : '/api/batch_update';
+        const body = editMode === 'single' ? 
+            { r: row, c: col, new_id: targetData.id } : 
             { old_id: oldId, new_id: targetData.id };
 
         try {
@@ -175,11 +180,11 @@
             });
 
             if (resp.ok) {
-                // 同步前端数据结构 [code, r, g, b]
                 const newPixel = [targetData.id, ...targetData.rgb];
-                if (type === 'single') {
-                    grid[selected.r][selected.c] = newPixel;
+                if (editMode === 'single') {
+                    grid[row][col] = newPixel;
                 } else {
+                    // 全局同步 grid 数据
                     for (let r = 0; r < grid.length; r++) {
                         for (let c = 0; c < grid[0].length; c++) {
                             if (grid[r][c][0] == oldId) grid[r][c] = newPixel;
@@ -189,9 +194,9 @@
                 render();
             }
         } catch (err) {
-            alert("同步失败，请检查网络或后端状态");
+            alert("同步数据时发生错误");
         }
-    }
+    };
 
     function adjustZoom(f) {
         cellSize = Math.max(8, Math.min(100, cellSize * f));
