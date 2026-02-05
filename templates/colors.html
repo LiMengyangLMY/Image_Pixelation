@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>颜色库管理 - 卡通描边优化版</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .color-group { margin-bottom: 40px; border-top: 2px solid #eee; padding-top: 20px; }
+        .color-card { 
+            width: 180px; border-radius: 8px; overflow: hidden; 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: transform 0.2s;
+            cursor: pointer; display: inline-block; margin: 10px; vertical-align: top;
+        }
+        .color-card:hover { transform: translateY(-5px); }
+        .swatch { height: 80px; display: flex; align-items: center; justify-content: center; font-weight: bold; }
+        .info { padding: 10px; font-size: 0.75rem; background: #fff; }
+        .lab-val { color: #666; font-style: italic; }
+        .prefix-badge { font-size: 1.5rem; margin-bottom: 20px; color: #333; }
+    </style>
+</head>
+<body class="bg-light">
+<div class="container py-5">
+    <h1 class="mb-4">颜色库数据库 (Color Database)</h1>
+
+    {% for prefix, colors in grouped_data.items() %}
+    <div class="color-group">
+        <div class="prefix-badge">系列: {{ prefix }} <span class="badge bg-secondary fs-6">{{ colors|length }} 种</span></div>
+        <div class="d-flex flex-wrap">
+            {% for c in colors %}
+            <div class="color-card" onclick="editColor('{{ c.num }}', {{ c.r }}, {{ c.g }}, {{ c.b }})">
+                <div class="swatch" style="background-color: {{ c.hex }}; color: {{ c.text_color }};">
+                    {{ c.num }}
+                </div>
+                <div class="info">
+                    <strong>RGB:</strong> {{ c.r }}, {{ c.g }}, {{ c.b }}<br>
+                    <strong>Lab:</strong> <span class="lab-val">{{ c.lab[0] }}, {{ c.lab[1] }}, {{ c.lab[2] }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">修改颜色: <span id="modalTitle"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label>红色 (R)</label>
+                    <input type="number" id="editR" class="form-control" min="0" max="255">
+                </div>
+                <div class="mb-3">
+                    <label>绿色 (G)</label>
+                    <input type="number" id="editG" class="form-control" min="0" max="255">
+                </div>
+                <div class="mb-3">
+                    <label>蓝色 (B)</label>
+                    <input type="number" id="editB" class="form-control" min="0" max="255">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" onclick="saveColor()">保存并更新 CSV</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    let currentNum = '';
+    const modal = new bootstrap.Modal(document.getElementById('editModal'));
+
+    function editColor(num, r, g, b) {
+        currentNum = num;
+        document.getElementById('modalTitle').innerText = num;
+        document.getElementById('editR').value = r;
+        document.getElementById('editG').value = g;
+        document.getElementById('editB').value = b;
+        modal.show();
+    }
+
+    function saveColor() {
+        const payload = {
+            num: currentNum,
+            r: document.getElementById('editR').value,
+            g: document.getElementById('editG').value,
+            b: document.getElementById('editB').value
+        };
+
+        fetch('/update_color', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        }).then(res => {
+            if (res.ok) location.reload();
+            else alert("保存失败");
+        });
+    }
+</script>
+</body>
+</html>

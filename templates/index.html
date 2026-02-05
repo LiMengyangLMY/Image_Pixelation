@@ -2,309 +2,36 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>图片颜色编码处理工具</title>
+    <title>工具箱 - 导航首页</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            font-family: Arial, sans-serif;
-        }
-        
-        body {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f5f5f5;
-        }
-        
-        .container {
-            background: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        
-        h1 {
-            color: #333;
-            margin-bottom: 20px;
-            text-align: center;
-        }
-        
-        .form-section {
-            margin-bottom: 30px;
-        }
-        
-        .form-group {
-            margin-bottom: 15px;
-        }
-        
-        label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
-            color: #555;
-        }
-        
-        input[type="file"] {
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            width: 100%;
-        }
-        
-        input[type="number"] {
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            width: 100%;
-            max-width: 200px;
-        }
-        
-        button {
-            background-color: #4CAF50;
-            color: white;
-            padding: 12px 24px;
-            border: none;
-            border-radius: 4px;
+        body { background-color: #f8f9fa; height: 100vh; display: flex; align-items: center; }
+        .nav-card {
+            transition: transform 0.3s;
             cursor: pointer;
-            font-size: 16px;
-            margin-top: 10px;
-        }
-        
-        button:hover {
-            background-color: #45a049;
-        }
-        
-        .result-section {
-            margin-top: 40px;
-            display: none;
-        }
-        
-        .result-section.show {
-            display: block;
-        }
-        
-        .image-container {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 20px;
-            margin-top: 20px;
-        }
-        
-        .image-box {
-            flex: 1;
-            min-width: 300px;
-        }
-        
-        .image-box img {
-            max-width: 100%;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-        }
-        
-        .image-box h3 {
-            margin-bottom: 10px;
-            color: #333;
-        }
-        
-        .download-btn {
-            display: inline-block;
-            background-color: #008CBA;
-            color: white;
-            padding: 8px 16px;
             text-decoration: none;
-            border-radius: 4px;
-            margin-top: 10px;
+            color: inherit;
         }
-        
-        .download-btn:hover {
-            background-color: #007B9E;
-        }
-        
-        .error-message {
-            color: #f44336;
-            padding: 10px;
-            background-color: #ffebee;
-            border-radius: 4px;
-            margin-bottom: 20px;
-        }
-        
-        .success-message {
-            color: #4CAF50;
-            padding: 10px;
-            background-color: #e8f5e9;
-            border-radius: 4px;
-            margin-bottom: 20px;
-        }
+        .nav-card:hover { transform: translateY(-10px); }
+        .icon-box { font-size: 3rem; margin-bottom: 1rem; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>图片颜色编码处理工具</h1>
-        
-        {% if error %}
-        <div class="error-message">{{ error }}</div>
-        {% endif %}
-        
-        {% if success %}
-        <div class="success-message">图片处理成功！</div>
-        {% endif %}
-        
-        <div class="form-section">
-            <form id="uploadForm" method="POST" enctype="multipart/form-data">
-                <div class="form-group">
-                    <label for="file">选择图片文件</label>
-                    <input type="file" id="file" name="file" required accept="image/*">
-                </div>
-                
-                <div class="form-group" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-                    <div>
-                        <label for="target_width">输出宽度 (横向格子数)</label>
-                        <input type="number" id="target_width" name="target_width" value="40" min="1">
-                    </div>
-                    <div>
-                        <label for="pixel_size">单格尺寸</label>
-                        <input type="number" id="pixel_size" name="pixel_size" value="20" min="1">
-                    </div>
-                </div>
-                <div style="background-color: #ffff00; padding: 2px; border-radius: 4px; margin-bottom: 20px; display: inline-block;">
-                <small style="color: #666;">* <strong>高度</strong>将按原图比例自动计算。</small>
-                <small style="color: #666;">* <strong>单格尺寸</strong>越大图纸越清晰。</small>
-                </div>
+    <div class="container text-center">
+        <h1 class="mb-5">图片与颜色处理系统</h1>
+        <div class="row justify-content-center gap-4">
+            <a href="{{ url_for('image_conversion') }}" class="col-md-4 card p-5 nav-card shadow-sm">
+                <div class="icon-box">🖼️</div>
+                <h3>图片颜色转换</h3>
+                <p class="text-muted">对卡通图片进行降色、网格化并编码处理</p>
+            </a>
 
-                <div class="form-group">
-                    <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; margin-bottom: 10px;">
-                        <input type="checkbox" id="reduce_colors" name="reduce_colors" style="width: 18px; height: 18px;">
-                        <span>开启精简颜色模式 </span>
-                    </label>
-                    
-                    <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                        <input type="checkbox" id="reduce_colors_Pro" name="reduce_colors_Pro" style="width: 18px; height: 18px;">
-                        <span>开启精简颜色Pro模式</span>
-                    </label>
-                </div>
-
-                <div class="form-group" id="color_count_group" style="display:none; margin-left: 28px;">
-                    <label for="color_count">目标颜色数量</label>
-                    <input type="number" id="color_count" name="color_count" min="1" max="256" value="16">
-                </div>
-
-                <button type="submit">处理图片</button>
-            </form>
+            <a href="{{ url_for('view_colors') }}" class="col-md-4 card p-5 nav-card shadow-sm">
+                <div class="icon-box">🎨</div>
+                <h3>颜色库管理</h3>
+                <p class="text-muted">查看、编辑 CSV 颜色数据库及其 Lab 空间值</p>
+            </a>
         </div>
-        
-        <div id="resultSection" class="result-section {% if success %}show{% endif %}">
-            <h2>处理结果</h2>
-            {% if success %}
-            <div class="image-container">
-                <div class="image-box">
-                    <h3>原始图片</h3>
-                    <img src="{{ original_image }}" alt="原始图片">
-                </div>
-                <div class="image-box">
-                    <h3>处理后图片</h3>
-                    <img src="{{ processed_image }}" alt="处理后图片">
-                    {% set filename = processed_image.split('/')[-1] %}
-                    <a href="{{ url_for('download_file', filename=filename) }}" class="download-btn">下载处理后图片</a>
-                </div>
-            </div>
-            {% endif %}
-        </div>
-       
-
     </div>
-
-  <script>
-    document.addEventListener('DOMContentLoaded', function() {
-    const form = document.getElementById('uploadForm');
-    const fileInput = document.getElementById('file');
-    const reduceCheckbox = document.getElementById('reduce_colors');
-    const reduceProCheckbox = document.getElementById('reduce_colors_Pro');
-    const colorCountGroup = document.getElementById('color_count_group');
-    const resultSection = document.getElementById('resultSection');
-    const submitBtn = form.querySelector('button');
-
-    // 用于持久化记录用户选择的文件
-    let lastSelectedFile = null;
-
-    // --- 1. 互斥与显示逻辑 ---
-    function updateColorGroup() {
-        colorCountGroup.style.display = (reduceCheckbox.checked || reduceProCheckbox.checked) ? 'block' : 'none';
-    }
-
-    reduceCheckbox.addEventListener('change', function() {
-        if (this.checked) reduceProCheckbox.checked = false;
-        updateColorGroup();
-    });
-
-    reduceProCheckbox.addEventListener('change', function() {
-        if (this.checked) reduceCheckbox.checked = false;
-        updateColorGroup();
-    });
-
-    // --- 2. 文件状态记录 ---
-    fileInput.addEventListener('change', function() {
-        if (this.files && this.files[0]) {
-            lastSelectedFile = this.files[0];
-            console.log("已记录文件:", lastSelectedFile.name);
-        }
-    });
-
-    // --- 3. 核心 AJAX 提交逻辑 ---
-    form.addEventListener('submit', function(e) {
-        e.preventDefault();
-
-        // 验证文件：如果 input 为空但我们有记录，则可以使用
-        if (!fileInput.files[0] && !lastSelectedFile) {
-            alert("请先选择一张图片");
-            return;
-        }
-
-        // 显示加载状态
-        const originalBtnText = submitBtn.innerText;
-        submitBtn.disabled = true;
-        submitBtn.innerText = '正在处理中...';
-
-        const formData = new FormData(form);
-        
-        // 【关键】如果没有新选文件，把记录的旧文件塞进去
-        if (!fileInput.files[0] && lastSelectedFile) {
-            formData.set('file', lastSelectedFile);
-        }
-
-        fetch(window.location.href, {
-            method: 'POST',
-            body: formData
-        })
-        .then(response => response.text())
-        .then(html => {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-            const newResult = doc.getElementById('resultSection');
-            
-            if (newResult) {
-                resultSection.innerHTML = newResult.innerHTML;
-                resultSection.classList.add('show');
-                // 自动滚动到结果区
-                resultSection.scrollIntoView({ behavior: 'smooth' });
-            }
-
-            const errorMsg = doc.querySelector('.error-message');
-            if (errorMsg) alert(errorMsg.innerText);
-        })
-        .catch(err => {
-            console.error(err);
-            alert('处理失败，请稍后重试');
-        })
-        .finally(() => {
-            submitBtn.disabled = false;
-            submitBtn.innerText = originalBtnText;
-        });
-    });
-});
-  </script>
-
 </body>
 </html>
