@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>交互式修改 - 颜色与编号视图</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: #f0f2f5; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+        .main-container { display: flex; flex: 1; overflow: hidden; }
+        #canvas-area { flex: 1; overflow: auto; background: #555; padding: 30px; display: flex; align-items: flex-start; justify-content: center; }
+        canvas { background: #fff; box-shadow: 0 0 20px rgba(0,0,0,0.3); cursor: crosshair; }
+        .sidebar { width: 320px; background: white; border-left: 1px solid #ddd; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; }
+        .swatch-item { width: 35px; height: 35px; margin: 3px; border: 1px solid #ccc; cursor: pointer; display: inline-block; border-radius: 4px; transition: transform 0.1s; }
+        .swatch-item:hover { transform: scale(1.1); border-color: #000; }
+        .swatch-item.active { border: 3px solid #0d6efd; box-shadow: 0 0 5px rgba(13,110,253,0.5); }
+        .info-panel { background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #eee; }
+        .btn-group-custom { display: flex; gap: 10px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+<nav class="navbar navbar-dark bg-dark px-3">
+    <span class="navbar-brand mb-0 h1">交互式绘图编辑器</span>
+    <div class="d-flex align-items-center">
+        <span class="text-light me-3 small">缩放: <span id="zoom-val">100</span>%</span>
+        <button class="btn btn-outline-light btn-sm me-2" onclick="adjustZoom(1.2)">放大</button>
+        <button class="btn btn-outline-light btn-sm me-2" onclick="adjustZoom(0.8)">缩小</button>
+        <a href="/download_modified" class="btn btn-success btn-sm">下载最终结果</a>
+    </div>
+</nav>
+
+<div class="main-container">
+    <div id="canvas-area">
+        <canvas id="mainCanvas"></canvas>
+    </div>
+
+    <div class="sidebar">
+        <div class="info-panel">
+            <h6>当前选中格子</h6>
+            <div class="small">坐标: <span id="info-pos" class="fw-bold">未选择</span></div>
+            <div class="small">当前编号: <span id="info-id" class="fw-bold">-</span></div>
+            <div id="info-color-preview" class="mt-2" style="height: 20px; width: 100%; border-radius: 3px; display: none; border: 1px solid #ddd;"></div>
+        </div>
+
+        <h6>选择替换色号:</h6>
+        <div id="palette-list" class="mb-3 d-flex flex-wrap" style="max-height: 300px; overflow-y: auto; align-content: flex-start;">
+            {% for id, rgb in palette.items() %}
+            <div class="swatch-item" 
+                 style="background: rgb({{rgb[0]}},{{rgb[1]}},{{rgb[2]}});" 
+                 title="色号: {{id}}" 
+                 onclick="setTarget('{{id}}', [{{rgb[0]}},{{rgb[1]}},{{rgb[2]}}], this)">
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="mt-auto">
+            <p class="small text-muted">目标色号: <span id="target-id-display" class="text-primary fw-bold">未选择</span></p>
+            <div class="d-grid gap-2">
+                <button class="btn btn-primary" onclick="execUpdate('single')">修改当前格</button>
+                <button class="btn btn-danger" onclick="execUpdate('batch')">全图替换此色号</button>
+                <hr>
+                <a href="/" class="btn btn-outline-secondary btn-sm text-center">返回首页</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // 数据初始化 (由后端注入)
+    // grid 结构为 [row][col][code, r, g, b]
+    const grid = {{ grid|tojson }};
+    let cellSize = 30; 
+    let selected = { r: -1, c: -1 };
+    let targetData = { id: null, rgb: [0, 0, 0] };
+
+    const canvas = document.getElementById('mainCanvas');
+    const ctx = canvas.getContext('2d');
+
+    function render() {
+        if (!grid || grid.length === 0) return;
+        const rows = grid.length;
+        const cols = grid[0].length;
+        
+        canvas.width = cols * cellSize;
+        canvas.height = rows * cellSize;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                // 解构数据：[编号, R, G, B]
+                const [code, rv, gv, bv] = grid[r][c];
+
+                // 1. 填充背景颜色
+                ctx.fillStyle = `rgb(${rv}, ${gv}, ${bv})`;
+                ctx.fillRect(c * cellSize, r * cellSize, cellSize, cellSize);
+
+                // 2. 绘制网格线
+                ctx.strokeStyle = "rgba(0,0,0,0.1)";
+                ctx.lineWidth = 1;
+                ctx.strokeRect(c * cellSize, r * cellSize, cellSize, cellSize);
+
+                // 3. 绘制编号文字 (只在格子足够大时绘制)
+                if (cellSize > 12) {
+                    const brightness = (rv * 299 + gv * 587 + bv * 114) / 1000;
+                    ctx.fillStyle = brightness > 128 ? "#000000" : "#ffffff";
+                    
+                    ctx.font = `bold ${cellSize * 0.35}px Arial`;
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    ctx.fillText(code, c * cellSize + cellSize / 2, r * cellSize + cellSize / 2);
+                }
+
+                // 4. 选中框效果
+                if (selected.r === r && selected.c === c) {
+                    ctx.strokeStyle = "#ff4757";
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(c * cellSize + 2, r * cellSize + 2, cellSize - 4, cellSize - 4);
+                }
+            }
+        }
+    }
+
+    // 画布点击交互
+    canvas.onclick = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        
+        selected.c = Math.floor(x / cellSize);
+        selected.r = Math.floor(y / cellSize);
+        
+        const cellData = grid[selected.r][selected.c];
+        const [code, r, g, b] = cellData;
+
+        // 更新侧边栏显示
+        document.getElementById('info-pos').innerText = `${selected.r}, ${selected.c}`;
+        document.getElementById('info-id').innerText = code;
+        const preview = document.getElementById('info-color-preview');
+        preview.style.display = 'block';
+        preview.style.backgroundColor = `rgb(${r},${g},${b})`;
+        
+        render();
+    };
+
+    // 选中目标色号
+    function setTarget(id, rgb, el) {
+        targetData.id = id;
+        targetData.rgb = rgb;
+        document.querySelectorAll('.swatch-item').forEach(s => s.classList.remove('active'));
+        el.classList.add('active');
+        document.getElementById('target-id-display').innerText = id;
+    }
+
+    // 执行修改
+    async function execUpdate(type) {
+        if (!targetData.id || selected.r === -1) {
+            alert("请先在画布选择格子，并从右侧点击目标色号！");
+            return;
+        }
+
+        const currentCell = grid[selected.r][selected.c];
+        const oldId = currentCell[0];
+        
+        const path = type === 'single' ? '/api/update_pixel' : '/api/batch_update';
+        const body = type === 'single' ? 
+            { r: selected.r, c: selected.c, new_id: targetData.id } : 
+            { old_id: oldId, new_id: targetData.id };
+
+        try {
+            const resp = await fetch(path, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body)
+            });
+
+            if (resp.ok) {
+                // 同步前端数据结构 [code, r, g, b]
+                const newPixel = [targetData.id, ...targetData.rgb];
+                if (type === 'single') {
+                    grid[selected.r][selected.c] = newPixel;
+                } else {
+                    for (let r = 0; r < grid.length; r++) {
+                        for (let c = 0; c < grid[0].length; c++) {
+                            if (grid[r][c][0] == oldId) grid[r][c] = newPixel;
+                        }
+                    }
+                }
+                render();
+            }
+        } catch (err) {
+            alert("同步失败，请检查网络或后端状态");
+        }
+    }
+
+    function adjustZoom(f) {
+        cellSize = Math.max(8, Math.min(100, cellSize * f));
+        document.getElementById('zoom-val').innerText = Math.round((cellSize/30)*100);
+        render();
+    }
+
+    window.onload = render;
+</script>
+
+</body>
+</html>

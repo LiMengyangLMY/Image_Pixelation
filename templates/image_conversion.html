@@ -138,6 +138,42 @@
             border-radius: 4px;
             margin-bottom: 20px;
         }
+        /* 容器样式：确保在最下方并有足够间距 */
+        .draw-redirect-container {
+            margin-top: 50px;
+            padding: 30px;
+            background-color: #f8f9fa; /* 浅灰色背景突出区域 */
+            border-top: 2px dashed #ddd;
+            text-align: center;
+            width: 100%;
+        }
+
+        /* 提示文字样式 */
+        .hint-text {
+            color: #666;
+            font-size: 1.1rem;
+            margin-bottom: 20px;
+        }
+
+        /* 大按钮样式 */
+        .btn-draw-large {
+            display: inline-block;
+            background-color: #007bff; /* 蓝色 */
+            color: white !important;
+            padding: 18px 40px;
+            font-size: 24px; /* 调大字号 */
+            font-weight: bold;
+            text-decoration: none;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,123,255,0.3);
+            transition: all 0.3s ease;
+        }
+
+        .btn-draw-large:hover {
+            background-color: #0056b3;
+            transform: translateY(-3px); /* 悬浮位移感 */
+            box-shadow: 0 6px 20px rgba(0,123,255,0.4);
+        }
     </style>
 </head>
 <body>
@@ -211,7 +247,13 @@
                     {% set filename = processed_image.split('/')[-1] %}
                     <a href="{{ url_for('download_file', filename=filename) }}" class="download-btn">下载处理后图片</a>
                 </div>
+                <div class="nav-btn-box">
+                    <a href="{{ url_for('draw_page') }}" class="btn-draw-large">
+                        🎨 进入交互式绘图修改
+                    </a>
+                </div>
             </div>
+
             {% endif %}
         </div>
        

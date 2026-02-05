@@ -1,7 +1,7 @@
 #=====================================================
 #       Flask Web应用 + 图片颜色编码处理
 #=====================================================
-from flask import Flask, render_template, request, url_for, send_file
+from flask import Flask, render_template, request, url_for, send_file,jsonify
 import os
 import uuid
 from werkzeug.utils import secure_filename
@@ -12,6 +12,16 @@ from flask import render_template
 import numpy as np
 from sklearn.cluster import KMeans
 import colorsys
+from skimage import color as sk_color
+
+#全局变量
+current_state = {
+    'grid': None,       # 2D list: 存储每个格子的颜色 ID 或 RGB
+    'palette': {},      # dict: { 'ID': [R, G, B] }
+    'pixel_size': 20
+}
+temp_result_data = {"color_array": None, "pixel_size": 20}
+last_color_data = []
 os.environ["OMP_NUM_THREADS"] = "1"
 # 初始化Flask应用
 app = Flask(__name__)
@@ -40,6 +50,8 @@ def home():
 
 @app.route('/image_conversion', methods=['GET', 'POST'])
 def image_conversion():
+    global last_color_data # 引用全局变量
+    global temp_result_data
     if request.method == 'POST':
         # 1. 初始化变量，防止后续引用报错
         input_path = None 
@@ -89,7 +101,7 @@ def image_conversion():
             if is_reduce_Pro_on:
                 # 执行减少颜色Pro模式
                 target_count = int(request.form.get('color_count', 16))
-                _, processed_img = reduce_image_colors_Pro(
+                _, processed_img,color_array = reduce_image_colors_Pro(
                     input_path, output_path, color_db_path,
                     scale_factor=calc_scale_factor,
                     target_color_count=target_count,
@@ -98,7 +110,7 @@ def image_conversion():
             elif is_reduce_on:
                 # 执行减少颜色模式
                 target_count = int(request.form.get('color_count', 16))
-                _, processed_img = reduce_image_colors(
+                _, processed_img ,color_array = reduce_image_colors(
                     input_path, output_path, color_db_path,
                     scale_factor=calc_scale_factor,
                     target_color_count=target_count,
@@ -106,12 +118,20 @@ def image_conversion():
                 )
             else:
                 # 默认基础处理
-                _, processed_img, _ = process_image_with_color_code(
+                _, processed_img, _ ,color_array = process_image_with_color_code(
                     input_path, output_path, color_db_path,
                     scale_factor=calc_scale_factor,
                     pixel_scale=pixel_size
                 )
-            
+
+            if isinstance(color_array, np.ndarray):
+                last_color_data = color_array.tolist()
+            else:
+                last_color_data = color_array
+
+            temp_result_data['color_array'] = color_array
+            temp_result_data['pixel_size'] = pixel_size
+
             processed_img.save(output_path)
         except Exception as e:
             return render_template('image_conversion.html', error=f"处理失败: {e}")
@@ -135,10 +155,7 @@ def download_file(filename):
     )
 
 
-import pandas as pd
-import colorsys
-from skimage import color as sk_color
-from flask import jsonify
+
 
 @app.route('/colors')
 def view_colors():
@@ -179,6 +196,62 @@ def update_color():
         df.to_csv('color_data.csv', index=False)
         return jsonify({"status": "success"})
     return jsonify({"status": "error"}), 404
+
+@app.route('/draw_page')
+def draw_page():
+    global current_state, temp_result_data
+    
+    # 1. 只有点击进入此页面时才从临时区搬运数据到全局状态
+    if temp_result_data.get('color_array') is not None:
+        color_array = temp_result_data['color_array']
+        # 存入 4 维数组结构: [编号, R, G, B]
+        current_state['grid'] = color_array.tolist() if hasattr(color_array, 'tolist') else color_array
+        current_state['pixel_size'] = temp_result_data.get('pixel_size', 20)
+        
+        # 2. 核心修改：加载 palette 供侧边栏颜色选择使用
+        # 强制将编号转为字符串并去空格，防止匹配失败
+        try:
+            df_colors = pd.read_csv('color_data.csv')
+            current_state['palette'] = {
+                str(row['num']).strip(): [int(row['R']), int(row['G']), int(row['B'])] 
+                for _, row in df_colors.iterrows()
+            }
+        except Exception as e:
+            print(f"加载颜色库失败: {e}")
+            current_state['palette'] = {}
+
+    # 检查是否有数据
+    if current_state['grid'] is None:
+        return "请先在'图片颜色转换'页面处理图片再进入绘图页"
+
+    # 3. 必须在 render_template 中显式传递 palette 变量
+    return render_template('draw_page.html', 
+                           grid=current_state['grid'], 
+                           palette=current_state['palette'])
+
+
+@app.route('/api/update_pixel', methods=['POST'])
+def update_pixel():
+    data = request.json # {r, c, new_color_id}
+    r, c = data['r'], data['c']
+    current_state['grid'][r][c] = data['new_id']
+    return jsonify({"status": "success"})
+
+@app.route('/api/batch_update', methods=['POST'])
+def batch_update():
+    data = request.json # {old_id, new_id}
+    grid = np.array(current_state['grid'])
+    grid[grid == data['old_id']] = data['new_id']
+    current_state['grid'] = grid.tolist()
+    # 注意：此处更新了 color_code_count 的逻辑体现为 grid 中 ID 的分布改变
+    return jsonify({"status": "success"})
+
+@app.route('/download_modified')
+def download_modified():
+    img = visualize_color_array(current_state['grid'], current_state['palette'], current_state['pixel_size'])
+    temp_path = os.path.join(app.config['OUTPUT_FOLDER'], "modified_draw.png")
+    img.save(temp_path)
+    return send_file(temp_path, as_attachment=True)
 
 
 if __name__ == "__main__":

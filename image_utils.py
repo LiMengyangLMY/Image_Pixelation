@@ -594,7 +594,7 @@ def process_image_with_color_code(input_path, output_path, color_db_path, scale_
     color_array, color_code_count = image_to_color_array(input_path, color_db_path, scale_factor)
     # 使用自定义的像素块尺寸进行渲染
     output_img = visualize_color_array(color_array,color_code_count, pixel_scale)
-    return output_path, output_img, set(color_array[:, :, 0].flatten())
+    return output_path, output_img, set(color_array[:, :, 0].flatten()),color_array
 
 def reduce_image_colors(input_path, output_path, color_db_path, scale_factor=0.03, target_color_count=1, pixel_scale=20):
     color_array, color_code_count = image_to_color_array(input_path, color_db_path, scale_factor)
@@ -602,7 +602,7 @@ def reduce_image_colors(input_path, output_path, color_db_path, scale_factor=0.0
     color_array, color_code_count = reduce_color_array(color_array, color_code_count, target_color_count)
     # 使用自定义的像素块尺寸进行渲染
     output_img = visualize_color_array(color_array, color_code_count,pixel_scale)
-    return output_path, output_img
+    return output_path, output_img,color_array
 
 def reduce_image_colors_Pro(input_path, output_path, color_db_path, scale_factor=0.03,target_color_count=1,pixel_scale=20):
     color_array, color_code_count = image_to_color_array(input_path, color_db_path, scale_factor)
@@ -610,4 +610,4 @@ def reduce_image_colors_Pro(input_path, output_path, color_db_path, scale_factor
     color_array, color_code_count = reduce_color_Pro_array(color_array, color_code_count)
     output_img = visualize_color_array(color_array,color_code_count, pixel_scale)
 
-    return output_path, output_img
+    return output_path, output_img,color_array
