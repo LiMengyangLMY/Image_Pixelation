@@ -87,7 +87,7 @@ def image_conversion():
                 # 例如：原图1000px，目标40格，scale = 40/1000 = 0.04
                 calc_scale_factor = target_width_cells / orig_w
             
-            color_db_path = 'color_data.csv'
+            color_db_path = './data/color_data.csv'
         except Exception as e:
             return render_template('index.html', error=f"参数或图片解析失败: {e}")
 
