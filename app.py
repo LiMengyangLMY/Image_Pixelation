@@ -5,7 +5,7 @@ from flask import Flask, render_template, request, url_for, send_file,jsonify
 import os
 import uuid
 from werkzeug.utils import secure_filename
-from image_utils import reduce_image_colors_Pro,process_image_with_color_code, reduce_image_colors, load_color_database
+from image_utils import reduce_image_colors_Pro,process_image_with_color_code, reduce_image_colors,visualize_color_array, load_color_database
 import PIL.Image 
 import pandas as pd
 from flask import render_template
@@ -18,7 +18,8 @@ from skimage import color as sk_color
 current_state = {
     'grid': None,       # 2D list: 存储每个格子的颜色 ID 或 RGB
     'palette': {},      # dict: { 'ID': [R, G, B] }
-    'pixel_size': 20
+    'pixel_size': 20,
+    'color_code_count': {}
 }
 temp_result_data = {"color_array": None, "pixel_size": 20}
 last_color_data = []
@@ -101,7 +102,7 @@ def image_conversion():
             if is_reduce_Pro_on:
                 # 执行减少颜色Pro模式
                 target_count = int(request.form.get('color_count', 16))
-                _, processed_img,color_array = reduce_image_colors_Pro(
+                _, processed_img,color_array,color_code_count = reduce_image_colors_Pro(
                     input_path, output_path, color_db_path,
                     scale_factor=calc_scale_factor,
                     target_color_count=target_count,
@@ -110,7 +111,7 @@ def image_conversion():
             elif is_reduce_on:
                 # 执行减少颜色模式
                 target_count = int(request.form.get('color_count', 16))
-                _, processed_img ,color_array = reduce_image_colors(
+                _, processed_img ,color_array ,color_code_count= reduce_image_colors(
                     input_path, output_path, color_db_path,
                     scale_factor=calc_scale_factor,
                     target_color_count=target_count,
@@ -118,7 +119,7 @@ def image_conversion():
                 )
             else:
                 # 默认基础处理
-                _, processed_img, _ ,color_array = process_image_with_color_code(
+                _, processed_img, _ ,color_array,color_code_count = process_image_with_color_code(
                     input_path, output_path, color_db_path,
                     scale_factor=calc_scale_factor,
                     pixel_scale=pixel_size
@@ -131,6 +132,7 @@ def image_conversion():
 
             temp_result_data['color_array'] = color_array
             temp_result_data['pixel_size'] = pixel_size
+            temp_result_data['color_code_count'] = color_code_count
 
             processed_img.save(output_path)
         except Exception as e:
@@ -153,9 +155,6 @@ def download_file(filename):
         os.path.join(app.config['OUTPUT_FOLDER'], filename),
         as_attachment=True
     )
-
-
-
 
 @app.route('/colors')
 def view_colors():
@@ -201,15 +200,16 @@ def update_color():
 def draw_page():
     global current_state, temp_result_data
     
-    # 1. 只有点击进入此页面时才从临时区搬运数据到全局状态
+    # 当临时区有数据时，同步到当前全局状态
     if temp_result_data.get('color_array') is not None:
         color_array = temp_result_data['color_array']
-        # 存入 4 维数组结构: [编号, R, G, B]
         current_state['grid'] = color_array.tolist() if hasattr(color_array, 'tolist') else color_array
         current_state['pixel_size'] = temp_result_data.get('pixel_size', 20)
         
-        # 2. 核心修改：加载 palette 供侧边栏颜色选择使用
-        # 强制将编号转为字符串并去空格，防止匹配失败
+        # 将 color_code_count 从临时区搬运到全局状态
+        current_state['color_code_count'] = temp_result_data.get('color_code_count', {})
+        
+        # 加载 palette 逻辑
         try:
             df_colors = pd.read_csv('color_data.csv')
             current_state['palette'] = {
@@ -224,35 +224,104 @@ def draw_page():
     if current_state['grid'] is None:
         return "请先在'图片颜色转换'页面处理图片再进入绘图页"
 
-    # 3. 必须在 render_template 中显式传递 palette 变量
+    # 将 color_code_count 传入渲染函数
     return render_template('draw_page.html', 
                            grid=current_state['grid'], 
-                           palette=current_state['palette'])
-
+                           palette=current_state['palette'],
+                           color_counts=current_state.get('color_code_count', {}))
 
 @app.route('/api/update_pixel', methods=['POST'])
 def update_pixel():
-    data = request.json # {r, c, new_color_id}
+    data = request.json
     r, c = data['r'], data['c']
-    current_state['grid'][r][c] = data['new_id']
-    return jsonify({"status": "success"})
+    new_id = str(data['new_id'])
+    
+    # 获取旧 ID 并更新计数
+    old_id = str(current_state['grid'][r][c][0])
+    if old_id in current_state['color_code_count']:
+        current_state['color_code_count'][old_id]['count'] -= 1
+        if current_state['color_code_count'][old_id]['count'] <= 0:
+            del current_state['color_code_count'][old_id]
+            
+    # 更新 grid 颜色数据
+    new_rgb = current_state['palette'].get(new_id, [0,0,0])
+    current_state['grid'][r][c] = [new_id, *new_rgb]
+    
+    # 增加新 ID 计数
+    if new_id in current_state['color_code_count']:
+        current_state['color_code_count'][new_id]['count'] += 1
+    else:
+        current_state['color_code_count'][new_id] = {'count': 1, 'r': new_rgb[0], 'g': new_rgb[1], 'b': new_rgb[2]}
+        
+    return jsonify({"status": "success", "new_counts": current_state['color_code_count']})
 
 @app.route('/api/batch_update', methods=['POST'])
 def batch_update():
-    data = request.json # {old_id, new_id}
-    grid = np.array(current_state['grid'])
-    grid[grid == data['old_id']] = data['new_id']
-    current_state['grid'] = grid.tolist()
-    # 注意：此处更新了 color_code_count 的逻辑体现为 grid 中 ID 的分布改变
-    return jsonify({"status": "success"})
+    global current_state
+    data = request.json
+    old_id = str(data['old_id'])
+    new_id = str(data['new_id'])
+    
+    if old_id == new_id:
+        return jsonify({"status": "success", "new_counts": current_state['color_code_count']})
+
+    # 1. 更新 Grid 数据 (显式指定 dtype=object 保持整数类型)
+    grid_np = np.array(current_state['grid'], dtype=object)
+    mask = (grid_np[:, :, 0] == old_id) # 仅匹配第一列 ID
+    
+    # 获取新色号的 RGB
+    new_rgb = current_state['palette'].get(new_id, [0, 0, 0])
+    
+    # 批量更新匹配格子的 ID 和 RGB
+    grid_np[mask, 0] = new_id
+    grid_np[mask, 1] = int(new_rgb[0])
+    grid_np[mask, 2] = int(new_rgb[1])
+    grid_np[mask, 3] = int(new_rgb[2])
+    
+    current_state['grid'] = grid_np.tolist()
+
+    # 2. 同步更新 color_code_count 统计字典
+    if old_id in current_state['color_code_count']:
+        transferred_count = current_state['color_code_count'][old_id]['count']
+        # 移除旧色号统计
+        del current_state['color_code_count'][old_id]
+        
+        # 将计数累加到新色号中
+        if new_id in current_state['color_code_count']:
+            current_state['color_code_count'][new_id]['count'] += transferred_count
+        else:
+            current_state['color_code_count'][new_id] = {
+                'count': transferred_count,
+                'r': int(new_rgb[0]), 
+                'g': int(new_rgb[1]), 
+                'b': int(new_rgb[2])
+            }
+
+    return jsonify({"status": "success", "new_counts": current_state['color_code_count']})
 
 @app.route('/download_modified')
 def download_modified():
-    img = visualize_color_array(current_state['grid'], current_state['palette'], current_state['pixel_size'])
-    temp_path = os.path.join(app.config['OUTPUT_FOLDER'], "modified_draw.png")
-    img.save(temp_path)
-    return send_file(temp_path, as_attachment=True)
+    global current_state
+    if current_state['grid'] is None:
+        return "请先处理图片再进行下载", 400
 
+    try:
+        # 确保数据为 numpy 对象格式
+        color_array = np.array(current_state['grid'], dtype=object)
+        
+        # 修正参数：第二个参数必须是 color_code_count 而不是 palette
+        img = visualize_color_array(
+            color_array, 
+            current_state['color_code_count'], 
+            current_state['pixel_size']
+        )
+        
+        temp_path = os.path.join(app.config['OUTPUT_FOLDER'], "modified_draw.png")
+        img.save(temp_path)
+        return send_file(temp_path, as_attachment=True, download_name="final_grid_design.png")
+    except Exception as e:
+        print(f"生成图片失败: {e}")
+        return f"生成图片失败: {e}", 500
 
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5000)

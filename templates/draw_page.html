@@ -16,17 +16,37 @@
         .step-title { font-size: 0.9rem; font-weight: bold; color: #666; margin-bottom: 12px; display: flex; align-items: center; }
         .step-num { background: #0d6efd; color: white; width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; margin-right: 8px; }
         
-        /* 调色盘布局优化 */
-        .palette-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(45px, 1fr)); gap: 10px; max-height: 250px; overflow-y: auto; padding: 5px; }
+        /* 调色盘布局 */
+        .palette-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(30px, 1fr)); gap: 10px; max-height: 350px; overflow-y: auto; padding: 5px; }
         .swatch-wrapper { display: flex; flex-direction: column; align-items: center; cursor: pointer; }
-        .swatch-item { width: 40px; height: 35px; border: 1px solid #ccc; border-radius: 4px; transition: all 0.1s; position: relative; }
-        .swatch-id { font-size: 10px; color: #666; margin-top: 2px; font-weight: bold; }
+        .swatch-item { width: 25px; height: 25px; border: 1px solid #ccc; border-radius: 4px; transition: all 0.1s; position: relative; }
+        .swatch-id { font-size: 10px; color: #666; margin-top: 1px; font-weight: bold; }
         
         .swatch-wrapper:hover .swatch-item { transform: scale(1.1); border-color: #000; }
         .swatch-wrapper.active .swatch-item { border: 3px solid #0d6efd; box-shadow: 0 0 5px rgba(13,110,253,0.5); }
         .swatch-wrapper.active .swatch-id { color: #0d6efd; }
         
         .mode-btn-group .btn { flex: 1; }
+
+        /* 可拖动统计窗口 */
+        #stats-window {
+            position: fixed; top: 80px; left: 20px; width: 220px;
+            background: rgba(255,255,255,0.95); border: 1px solid #ccc;
+            border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 1000; cursor: move;
+        }
+        .stats-header { 
+            background: #f8f9fa; padding: 8px 12px; border-bottom: 1px solid #eee;
+            font-weight: bold; font-size: 13px; display: flex; justify-content: space-between;
+        }
+        #stats-content { max-height: 300px; overflow-y: auto; padding: 10px; }
+        .stats-item { 
+            display: flex; align-items: center; margin-bottom: 6px; 
+            font-size: 12px; padding: 4px; border-radius: 4px; transition: background 0.2s;
+        }
+        .stats-item:hover { background: #e9ecef; cursor: pointer; }
+        .stats-dot { width: 14px; height: 14px; border-radius: 2px; margin-right: 8px; border: 1px solid #999; }
+            
     </style>
 </head>
 <body>
@@ -40,6 +60,13 @@
         <a href="/download_modified" class="btn btn-success btn-sm">下载最终结果</a>
     </div>
 </nav>
+
+<div id="stats-window">
+    <div class="stats-header" id="stats-drag">
+        📊 颜色统计（可拖拽） <small id="total-info"></small>
+    </div>
+    <div id="stats-content"></div>
+</div>
 
 <div class="main-container">
     <div id="canvas-area">
@@ -87,90 +114,123 @@
 </div>
 
 <script>
-    // 后端注入数据
+    // 1. 数据初始化
     const grid = {{ grid|tojson }};
-    let cellSize = 30; 
+    const palette = {{ palette|tojson }};
+    let colorCounts = {{ color_counts|tojson }};
+    
+    let baseCellSize = 30; 
+    let zoom = 1.0;
     let editMode = 'single'; 
     let targetData = { id: null, rgb: [0, 0, 0] };
+    let hoveredId = null; // 当前悬停的高亮色号
 
     const canvas = document.getElementById('mainCanvas');
     const ctx = canvas.getContext('2d');
 
-    // 渲染画布
+    // 2. 渲染核心
     function render() {
         if (!grid || grid.length === 0) return;
         const rows = grid.length;
         const cols = grid[0].length;
+        const currentCellSize = baseCellSize * zoom;
         
-        canvas.width = cols * cellSize;
-        canvas.height = rows * cellSize;
+        canvas.width = cols * currentCellSize;
+        canvas.height = rows * currentCellSize;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         for (let r = 0; r < rows; r++) {
             for (let c = 0; c < cols; c++) {
-                const [code, rv, gv, bv] = grid[r][c];
+                const cell = grid[r][c];
+                if (!cell) continue;
+                const [code, rv, gv, bv] = cell;
 
                 // 填充颜色
                 ctx.fillStyle = `rgb(${rv}, ${gv}, ${bv})`;
-                ctx.fillRect(c * cellSize, r * cellSize, cellSize, cellSize);
+                ctx.fillRect(c * currentCellSize, r * currentCellSize, currentCellSize, currentCellSize);
 
-                // 网格线
-                ctx.strokeStyle = "rgba(0,0,0,0.1)";
-                ctx.strokeRect(c * cellSize, r * cellSize, cellSize, cellSize);
+                // 绘制高亮边框 (红色加粗)
+                if (hoveredId && String(code) === String(hoveredId)) {
+                    ctx.strokeStyle = "#ff0000";
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(c * currentCellSize + 1, r * currentCellSize + 1, currentCellSize - 2, currentCellSize - 2);
+                } else if (zoom > 0.5) {
+                    // 普通网格线
+                    ctx.strokeStyle = "rgba(0,0,0,0.1)";
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(c * currentCellSize, r * currentCellSize, currentCellSize, currentCellSize);
+                }
 
                 // 绘制编号
-                if (cellSize > 12) {
+                if (currentCellSize > 15) {
                     const brightness = (rv * 299 + gv * 587 + bv * 114) / 1000;
                     ctx.fillStyle = brightness > 128 ? "#000000" : "#ffffff";
-                    ctx.font = `bold ${cellSize * 0.35}px Arial`;
+                    ctx.font = `bold ${currentCellSize * 0.35}px Arial`;
                     ctx.textAlign = "center";
                     ctx.textBaseline = "middle";
-                    ctx.fillText(code, c * cellSize + cellSize / 2, r * cellSize + cellSize / 2);
+                    ctx.fillText(code, c * currentCellSize + currentCellSize / 2, r * currentCellSize + currentCellSize / 2);
                 }
             }
         }
     }
 
-    function setMode(mode) {
-        editMode = mode;
+    // 3. 更新统计 UI 并绑定悬停事件
+    function updateStatsUI() {
+        const container = document.getElementById('stats-content');
+        if (!container) return;
+        container.innerHTML = '';
+        let total = 0;
+
+        Object.keys(colorCounts).sort().forEach(id => {
+            const item = colorCounts[id];
+            total += item.count;
+            const div = document.createElement('div');
+            div.className = 'stats-item';
+            
+            // 绑定悬停事件：高亮图纸中所有对应色号
+            div.onmouseenter = () => { hoveredId = id; render(); };
+            div.onmouseleave = () => { hoveredId = null; render(); };
+
+            div.innerHTML = `
+                <div class="stats-dot" style="background: rgb(${item.r},${item.g},${item.b})"></div>
+                <span style="flex:1"><strong>${id}</strong></span>
+                <span class="badge bg-secondary">${item.count}</span>
+            `;
+            container.appendChild(div);
+        });
+        document.getElementById('total-info').innerText = `(${total}格)`;
     }
 
+    // 4. 模式与目标选择
+    function setMode(mode) { 
+        editMode = mode; 
+        hoveredId = null; // 切换模式时清空高亮
+        render();
+    }
+    
     function setTarget(id, rgb, el) {
         targetData.id = id;
         targetData.rgb = rgb;
-        // 切换高亮类名
         document.querySelectorAll('.swatch-wrapper').forEach(w => w.classList.remove('active'));
         el.classList.add('active');
         document.getElementById('target-id-display').innerText = id;
     }
 
-    // 画布交互核心逻辑
+    // 5. 点击交互与画布悬停预览
     canvas.onclick = async (e) => {
-        if (!targetData.id) {
-            alert("请先执行第二步：选择目标色号！");
-            return;
-        }
+        if (!targetData.id) { alert("请先选择目标色号！"); return; }
+        const pos = getMouseGridPos(e);
+        if (!pos) return;
 
-        const rect = canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        
-        const col = Math.floor(x / cellSize);
-        const row = Math.floor(y / cellSize);
-        
-        if (row >= grid.length || col >= grid[0].length) return;
+        const {row, col} = pos;
+        const oldId = String(grid[row][col][0]);
+        const newId = String(targetData.id);
+        if (oldId === newId) return;
 
-        const currentCell = grid[row][col];
-        const oldId = currentCell[0];
-
-        // 避免重复点击同一颜色
-        if (oldId === targetData.id) return;
-
-        // 根据模式决定 API 路径
         const path = editMode === 'single' ? '/api/update_pixel' : '/api/batch_update';
         const body = editMode === 'single' ? 
-            { r: row, c: col, new_id: targetData.id } : 
-            { old_id: oldId, new_id: targetData.id };
+            { r: row, c: col, new_id: newId } : 
+            { old_id: oldId, new_id: newId };
 
         try {
             const resp = await fetch(path, {
@@ -180,31 +240,92 @@
             });
 
             if (resp.ok) {
-                const newPixel = [targetData.id, ...targetData.rgb];
+                const data = await resp.json();
+                const newPixel = [newId, ...targetData.rgb];
+                
                 if (editMode === 'single') {
                     grid[row][col] = newPixel;
                 } else {
-                    // 全局同步 grid 数据
                     for (let r = 0; r < grid.length; r++) {
                         for (let c = 0; c < grid[0].length; c++) {
-                            if (grid[r][c][0] == oldId) grid[r][c] = newPixel;
+                            if (String(grid[r][c][0]) === oldId) grid[r][c] = newPixel;
                         }
                     }
                 }
+                
+                if (data.new_counts) {
+                    colorCounts = data.new_counts;
+                    updateStatsUI();
+                }
                 render();
             }
-        } catch (err) {
-            alert("同步数据时发生错误");
+        } catch (err) { console.error(err); }
+    };
+
+    // 画布鼠标移动：仅在“全换模式”下触发预览高亮
+    canvas.onmousemove = (e) => {
+        if (editMode !== 'batch') {
+            if (hoveredId !== null) { hoveredId = null; render(); }
+            return;
+        }
+
+        const pos = getMouseGridPos(e);
+        if (pos) {
+            const newHoveredId = String(grid[pos.row][pos.col][0]);
+            if (hoveredId !== newHoveredId) {
+                hoveredId = newHoveredId;
+                render();
+            }
         }
     };
 
+    canvas.onmouseleave = () => {
+        if (editMode === 'batch') {
+            hoveredId = null;
+            render();
+        }
+    };
+
+    // 工具函数：获取鼠标所在的行列
+    function getMouseGridPos(e) {
+        const rect = canvas.getBoundingClientRect();
+        const currentCellSize = baseCellSize * zoom;
+        const col = Math.floor((e.clientX - rect.left) / currentCellSize);
+        const row = Math.floor((e.clientY - rect.top) / currentCellSize);
+        if (row >= 0 && row < grid.length && col >= 0 && col < grid[0].length) {
+            return {row, col};
+        }
+        return null;
+    }
+
+    // 6. 缩放功能
     function adjustZoom(f) {
-        cellSize = Math.max(8, Math.min(100, cellSize * f));
-        document.getElementById('zoom-val').innerText = Math.round((cellSize/30)*100);
+        zoom = Math.max(0.2, Math.min(5.0, zoom * f));
+        document.getElementById('zoom-val').innerText = Math.round(zoom * 100);
         render();
     }
 
-    window.onload = render;
+    // 7. 统计窗口拖拽
+    const statsWin = document.getElementById("stats-window");
+    const statsDrag = document.getElementById("stats-drag");
+    let isDragging = false, offset = [0, 0];
+
+    statsDrag.onmousedown = (e) => {
+        isDragging = true;
+        offset = [statsWin.offsetLeft - e.clientX, statsWin.offsetTop - e.clientY];
+    };
+    document.onmousemove = (e) => {
+        if (!isDragging) return;
+        statsWin.style.left = (e.clientX + offset[0]) + "px";
+        statsWin.style.top = (e.clientY + offset[1]) + "px";
+    };
+    document.onmouseup = () => isDragging = false;
+
+    // 初始加载
+    window.onload = () => {
+        render();
+        updateStatsUI();
+    };
 </script>
 
 </body>
