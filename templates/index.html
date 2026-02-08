@@ -17,58 +17,63 @@
     </style>
 </head>
 <body>
-    <div class="container text-center">
-        <div class="container mb-5">
-            <div class="card shadow-sm border-primary">
-                <div class="card-header bg-primary text-white">🗄️ 颜色数据库管理中心</div>
-                <div class="card-body">
-                    <div class="row g-3 align-items-center">
-                        <div class="col-md-5">
-                            <label class="form-label small fw-bold">选择/切换数据库</label>
-                            <div class="input-group">
-                                <select id="db-select" class="form-select">
-                                    {% for file in csv_files %}
-                                    <option value="{{ file }}" {% if file == current %}selected{% endif %}>{{ file }}</option>
-                                    {% endfor %}
-                                </select>
-                                <button class="btn btn-outline-primary" onclick="dbAction('select')">应用</button>
-                                <button class="btn btn-outline-danger" onclick="dbAction('delete')">删除</button>
-                            </div>
-                        </div>
+    <div class="container text-center mt-5">
+    <h1 class="mb-5 fw-bold">图片与颜色处理系统</h1>
 
-                        <div class="col-md-7">
-                            <label class="form-label small fw-bold">新建数据库文件</label>
-                            <div class="input-group">
-                                <input type="text" id="new-db-name" class="form-control" placeholder="输入文件名 (如: my_colors)">
-                                <span class="input-group-text">.csv</span>
-                                <button class="btn btn-success" onclick="dbAction('create')">确认新建</button>
-                            </div>
-                        </div>
+    <div class="card shadow-sm mb-5 mx-auto" style="max-width: 900px;">
+        <div class="card-body bg-light rounded">
+            <div class="row g-3 align-items-end">
+                <div class="col-md-6">
+                    <label class="form-label small fw-bold d-block text-start ps-1">📂 切换或删除当前数据库</label>
+                    <div class="input-group">
+                        <select id="db-select" class="form-select">
+                            {% for file in csv_files %}
+                            <option value="{{ file }}" {% if file == current %}selected{% endif %}>{{ file }}</option>
+                            {% endfor %}
+                        </select>
+                        <button class="btn btn-primary" onclick="dbAction('select')">应用</button>
+                        <button class="btn btn-outline-danger" onclick="dbAction('delete')">删除文件</button>
+                    </div>
+                </div>
+
+                <div class="col-md-6">
+                    <label class="form-label small fw-bold d-block text-start ps-1">➕ 新建颜色数据文件</label>
+                    <div class="input-group">
+                        <input type="text" id="new-db-name" class="form-control" placeholder="输入文件名">
+                        <span class="input-group-text">.csv</span>
+                        <button class="btn btn-success" onclick="dbAction('create')">创建</button>
                     </div>
                 </div>
             </div>
         </div>
+    </div>
 
-        <h1 class="mb-5">图片与颜色处理系统</h1>
-        <div class="row justify-content-center gap-4">
-            <a href="{{ url_for('image_conversion') }}" class="col-md-4 card p-5 nav-card shadow-sm">
+    <div class="row justify-content-center g-4">
+        <div class="col-md-4">
+            <a href="{{ url_for('image_conversion') }}" class="card h-100 p-4 nav-card shadow-sm border-0">
                 <div class="icon-box">🖼️</div>
-                <h3>图片颜色转换</h3>
-                <p class="text-muted">对卡通图片进行降色、网格化并编码处理</p>
+                <h4 class="fw-bold">图片颜色转换</h4>
+                <p class="text-muted small">对卡通图片进行降色、网格化并编码处理</p>
             </a>
+        </div>
 
-            <a href="{{ url_for('view_colors') }}" class="col-md-4 card p-5 nav-card shadow-sm">
+        <div class="col-md-4">
+            <a href="{{ url_for('view_colors') }}" class="card h-100 p-4 nav-card shadow-sm border-0">
                 <div class="icon-box">🎨</div>
-                <h3>颜色库管理</h3>
-                <p class="text-muted">查看、编辑 CSV 颜色数据库及其 Lab 空间值</p>
+                <h4 class="fw-bold">颜色库管理</h4>
+                <p class="text-muted small">查看、编辑 CSV 颜色数据库及其 Lab 空间值</p>
             </a>
-            <a href="{{ url_for('draw_page') }}" class="col-md-4 card p-5 nav-card shadow-sm">
-                <div class="icon-box">🎨</div>
-                <h3>画布交互操作</h3> 
-                <p class="text-muted">进入画布页进行交互操作</p>
+        </div>
+
+        <div class="col-md-4">
+            <a href="{{ url_for('draw_page') }}" class="card h-100 p-4 nav-card shadow-sm border-0">
+                <div class="icon-box">🖌️</div>
+                <h4 class="fw-bold">画布交互操作</h4>
+                <p class="text-muted small">进入画布页进行交互操作，实时修改像素</p>
             </a>
         </div>
     </div>
+</div>
 </body>
 </html>
 

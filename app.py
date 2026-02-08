@@ -149,7 +149,7 @@ def image_conversion():
                 # 执行减少颜色Pro模式
                 target_count = int(request.form.get('color_count', 16))
                 _, processed_img,color_array,color_code_count = reduce_image_colors_Pro(
-                    input_path, output_path, color_db_path,
+                    input_path, output_path, current_color_db,
                     scale_factor=calc_scale_factor,
                     target_color_count=target_count,
                     pixel_scale=pixel_size
@@ -158,7 +158,7 @@ def image_conversion():
                 # 执行减少颜色模式
                 target_count = int(request.form.get('color_count', 16))
                 _, processed_img ,color_array ,color_code_count= reduce_image_colors(
-                    input_path, output_path, color_db_path,
+                    input_path, output_path, current_color_db,
                     scale_factor=calc_scale_factor,
                     target_color_count=target_count,
                     pixel_scale=pixel_size
@@ -166,7 +166,7 @@ def image_conversion():
             else:
                 # 默认基础处理
                 _, processed_img, _ ,color_array,color_code_count = process_image_with_color_code(
-                    input_path, output_path, color_db_path,
+                    input_path, output_path, current_color_db,
                     scale_factor=calc_scale_factor,
                     pixel_scale=pixel_size
                 )
