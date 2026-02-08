@@ -13,8 +13,17 @@ import numpy as np
 from sklearn.cluster import KMeans
 import colorsys
 from skimage import color as sk_color
+#————————————————————————————————#
+#             全局变量            #
+#————————————————————————————————#
+ # 颜色数据库的默认路径
+DATA_DIR = './data/'
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR)
 
-#全局变量
+# 默认选中的数据库文件（全局变量）
+current_color_db = os.path.join(DATA_DIR, 'color_data.csv')
+
 current_state = {
     'grid': None,       # 2D list: 存储每个格子的颜色 ID 或 RGB
     'palette': {},      # dict: { 'ID': [R, G, B] }
@@ -45,9 +54,46 @@ def allowed_file(filename):
 
 @app.route('/')
 def home():
-    """主导航页面"""
-    return render_template('index.html')
+    """主导航页面：动态读取数据文件列表"""
+    csv_files = [f for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
+    current_name = os.path.basename(current_color_db)
+    return render_template('index.html', csv_files=csv_files, current=current_name)
 
+@app.route('/api/manage_db', methods=['POST'])
+def manage_db():
+    global current_color_db
+    action = request.json.get('action')
+    filename = request.json.get('filename')
+
+    if not filename.endswith('.csv'):
+        filename += '.csv'
+
+    file_path = os.path.join(DATA_DIR, filename)
+
+    if action == 'select':
+        if os.path.exists(file_path):
+            current_color_db = file_path
+            return jsonify({"status": "success", "msg": f"已切换至: {filename}"})
+        
+    elif action == 'create':
+        if os.path.exists(file_path):
+            return jsonify({"status": "error", "msg": "文件名已存在"}), 400
+        # 创建带表头的空 CSV
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write("num,R,G,B\n") 
+        return jsonify({"status": "success", "msg": f"新数据库 {filename} 创建成功"})
+
+    elif action == 'delete':
+        if filename == 'color_data.csv':
+            return jsonify({"status": "error", "msg": "默认数据库不允许删除"}), 400
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            # 如果删除的是当前选中的，则切换回默认
+            if current_color_db == file_path:
+                current_color_db = os.path.join(DATA_DIR, 'color_data.csv')
+            return jsonify({"status": "success", "msg": "删除成功"})
+
+    return jsonify({"status": "error", "msg": "操作失败"}), 400
 
 @app.route('/image_conversion', methods=['GET', 'POST'])
 def image_conversion():
@@ -87,7 +133,7 @@ def image_conversion():
                 # 例如：原图1000px，目标40格，scale = 40/1000 = 0.04
                 calc_scale_factor = target_width_cells / orig_w
             
-            color_db_path = './data/color_data.csv'
+            color_db_path = current_color_db
         except Exception as e:
             return render_template('index.html', error=f"参数或图片解析失败: {e}")
 
@@ -158,7 +204,7 @@ def download_file(filename):
 
 @app.route('/colors')
 def view_colors():
-    df = pd.read_csv('color_data.csv')
+    df = pd.read_csv(current_color_db)
     # 转换为 Lab 空间以供显示
     rgbs = df[['R', 'G', 'B']].values.reshape(-1, 1, 3) / 255.0
     labs = sk_color.rgb2lab(rgbs).reshape(-1, 3)
@@ -187,12 +233,12 @@ def view_colors():
 @app.route('/update_color', methods=['POST'])
 def update_color():
     data = request.json
-    df = pd.read_csv('color_data.csv')
+    df = pd.read_csv(current_color_db)
     # 根据 num 更新对应的 R, G, B
     idx = df[df['num'] == data['num']].index
     if not idx.empty:
         df.loc[idx, ['R', 'G', 'B']] = [int(data['r']), int(data['g']), int(data['b'])]
-        df.to_csv('color_data.csv', index=False)
+        df.to_csv(current_color_db, index=False)
         return jsonify({"status": "success"})
     return jsonify({"status": "error"}), 404
 
@@ -211,7 +257,7 @@ def draw_page():
         
         # 加载 palette 逻辑
         try:
-            df_colors = pd.read_csv('color_data.csv')
+            df_colors = pd.read_csv(current_color_db)
             current_state['palette'] = {
                 str(row['num']).strip(): [int(row['R']), int(row['G']), int(row['B'])] 
                 for _, row in df_colors.iterrows()

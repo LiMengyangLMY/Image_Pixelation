@@ -18,6 +18,37 @@
 </head>
 <body>
     <div class="container text-center">
+        <div class="container mb-5">
+            <div class="card shadow-sm border-primary">
+                <div class="card-header bg-primary text-white">🗄️ 颜色数据库管理中心</div>
+                <div class="card-body">
+                    <div class="row g-3 align-items-center">
+                        <div class="col-md-5">
+                            <label class="form-label small fw-bold">选择/切换数据库</label>
+                            <div class="input-group">
+                                <select id="db-select" class="form-select">
+                                    {% for file in csv_files %}
+                                    <option value="{{ file }}" {% if file == current %}selected{% endif %}>{{ file }}</option>
+                                    {% endfor %}
+                                </select>
+                                <button class="btn btn-outline-primary" onclick="dbAction('select')">应用</button>
+                                <button class="btn btn-outline-danger" onclick="dbAction('delete')">删除</button>
+                            </div>
+                        </div>
+
+                        <div class="col-md-7">
+                            <label class="form-label small fw-bold">新建数据库文件</label>
+                            <div class="input-group">
+                                <input type="text" id="new-db-name" class="form-control" placeholder="输入文件名 (如: my_colors)">
+                                <span class="input-group-text">.csv</span>
+                                <button class="btn btn-success" onclick="dbAction('create')">确认新建</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <h1 class="mb-5">图片与颜色处理系统</h1>
         <div class="row justify-content-center gap-4">
             <a href="{{ url_for('image_conversion') }}" class="col-md-4 card p-5 nav-card shadow-sm">
@@ -40,3 +71,30 @@
     </div>
 </body>
 </html>
+
+<script>
+    async function dbAction(action) {
+        let filename = "";
+        if (action === 'create') {
+            filename = document.getElementById('new-db-name').value.trim();
+            if (!filename) return alert("请输入文件名");
+        } else {
+            filename = document.getElementById('db-select').value;
+            if (action === 'delete' && !confirm(`确定要永久删除 ${filename} 吗？`)) return;
+        }
+
+        const response = await fetch('/api/manage_db', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ action, filename })
+        });
+
+        const result = await response.json();
+        if (result.status === 'success') {
+            alert(result.msg);
+            location.reload(); // 刷新页面同步文件列表
+        } else {
+            alert("错误: " + result.msg);
+        }
+    }
+</script>
