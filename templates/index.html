@@ -14,6 +14,7 @@
         }
         .nav-card:hover { transform: translateY(-10px); }
         .icon-box { font-size: 3rem; margin-bottom: 1rem; }
+        .card-header-custom { background: #e9ecef; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -27,7 +28,7 @@
                     <label class="form-label small fw-bold d-block text-start ps-1">📂 切换或删除当前数据库</label>
                     <div class="input-group">
                         <select id="db-select" class="form-select">
-                            {% for file in csv_files %}
+                            {% for file in db_files %}
                             <option value="{{ file }}" {% if file == current %}selected{% endif %}>{{ file }}</option>
                             {% endfor %}
                         </select>
@@ -37,10 +38,10 @@
                 </div>
 
                 <div class="col-md-6">
-                    <label class="form-label small fw-bold d-block text-start ps-1">➕ 新建颜色数据文件</label>
+                    <label class="form-label small fw-bold d-block text-start ps-1">➕ 新建颜色数据库</label>
                     <div class="input-group">
                         <input type="text" id="new-db-name" class="form-control" placeholder="输入文件名">
-                        <span class="input-group-text">.csv</span>
+                        <span class="input-group-text">.db</span>
                         <button class="btn btn-success" onclick="dbAction('create')">创建</button>
                     </div>
                 </div>
@@ -61,7 +62,7 @@
             <a href="{{ url_for('view_colors') }}" class="card h-100 p-4 nav-card shadow-sm border-0">
                 <div class="icon-box">🎨</div>
                 <h4 class="fw-bold">颜色库管理</h4>
-                <p class="text-muted small">查看、编辑 CSV 颜色数据库及其 Lab 空间值</p>
+                <p class="text-muted small">查看、编辑 SQLite 颜色数据库及其 Lab 空间值</p>
             </a>
         </div>
 
@@ -74,8 +75,6 @@
         </div>
     </div>
 </div>
-</body>
-</html>
 
 <script>
     async function dbAction(action) {
@@ -85,21 +84,29 @@
             if (!filename) return alert("请输入文件名");
         } else {
             filename = document.getElementById('db-select').value;
+            if (!filename) return alert("请先选择或创建一个数据库");
             if (action === 'delete' && !confirm(`确定要永久删除 ${filename} 吗？`)) return;
         }
 
-        const response = await fetch('/api/manage_db', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ action, filename })
-        });
+        try {
+            const response = await fetch('/api/manage_db', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ action, filename })
+            });
 
-        const result = await response.json();
-        if (result.status === 'success') {
-            alert(result.msg);
-            location.reload(); // 刷新页面同步文件列表
-        } else {
-            alert("错误: " + result.msg);
+            const result = await response.json();
+            if (result.status === 'success') {
+                alert(result.msg);
+                location.reload(); // 成功后刷新页面以同步状态
+            } else {
+                alert("错误: " + result.msg);
+            }
+        } catch (error) {
+            console.error("操作失败:", error);
+            alert("请求失败，请检查服务器连接");
         }
     }
 </script>
+</body>
+</html>
