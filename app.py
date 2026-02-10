@@ -5,7 +5,9 @@ from flask import Flask, render_template, request, url_for, send_file,jsonify
 import os
 import uuid
 from werkzeug.utils import secure_filename
-from image_utils import reduce_image_colors_Pro,process_image_with_color_code, reduce_image_colors,visualize_color_array, load_color_database
+from image_utils import save_drawing_to_sqlite,reduce_image_colors_Pro,process_image_with_color_code, reduce_image_colors,visualize_color_array, load_color_database_sqlite
+
+
 import PIL.Image 
 import pandas as pd
 from flask import render_template
@@ -193,6 +195,45 @@ def image_conversion():
     
     return render_template('image_conversion.html')
 
+@app.route('/process', methods=['POST'])
+def process_route():
+    # ... 执行原有的图片处理逻辑得到 color_array 和 color_code_count ...
+    
+    drawing_id = str(uuid.uuid4()) # 生成唯一图纸ID
+    save_drawing_to_sqlite(drawing_id, color_array, color_code_count)
+    
+    return jsonify({
+        "status": "success",
+        "drawing_id": drawing_id  # 返回给前端，用于后续加载
+    })
+
+@app.route('/load_drawing/<drawing_id>')
+def load_drawing(drawing_id):
+    db_path = os.path.join('./data/DrawingData', f"{drawing_id}.db")
+    if not os.path.exists(db_path):
+        return jsonify({"error": "图纸不存在"}), 404
+
+    conn = sqlite3.connect(db_path)
+    
+    # 读取维度和统计信息
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM metadata WHERE key='dimensions'")
+    rows, cols = json.loads(cursor.fetchone()[0])
+    
+    cursor.execute("SELECT value FROM metadata WHERE key='color_code_count'")
+    color_code_count = json.loads(cursor.fetchone()[0])
+
+    # 重构 color_array
+    color_array = np.empty((rows, cols, 1), dtype=object)
+    cursor.execute("SELECT r, c, color_id FROM grid")
+    for r, c, cid in cursor.fetchall():
+        color_array[r, c, 0] = cid
+        
+    conn.close()
+    return jsonify({
+        "grid": color_array.tolist(), 
+        "counts": color_code_count
+    })
 
 # 下载处理后的图片
 @app.route('/download/<filename>')
