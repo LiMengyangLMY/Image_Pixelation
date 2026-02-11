@@ -146,7 +146,7 @@ def view_colors():
 #————————————————————————————————————————#
 #          保存图纸、图纸源数据
 #————————————————————————————————————————#
-# 保存/下载可视化图片
+# 下载可视化图片
 @app.route('/download_file/<filename>')
 def download_file(filename):
     """
@@ -164,32 +164,89 @@ def download_file(filename):
 # 保存图纸源数据到本地数据库
 @app.route('/api/save_modified', methods=['POST'])
 def save_modified():
-    """
-    使用 save_drawing_to_sqlite 保存图纸源信息
-    """
-    global current_state
-    if current_state['grid'] is None:
+    # 尝试从 temp_result_data 获取数据（如果 current_state 为空）
+    grid_to_save = current_state.get('grid')
+    counts_to_save = current_state.get('color_code_count')
+
+    if grid_to_save is None and temp_result_data.get('color_array') is not None:
+        grid_to_save = temp_result_data['color_array']
+        counts_to_save = temp_result_data['color_code_count']
+
+    if grid_to_save is None:
         return jsonify({"status": "error", "msg": "没有可保存的数据"}), 400
 
     try:
-        # 生成或获取图纸 ID
         drawing_id = request.json.get('drawing_id') or str(uuid.uuid4())[:8]
+        # 确保是 numpy 数组格式
+        color_array = np.array(grid_to_save, dtype=object)
+        save_drawing_to_sqlite(drawing_id, color_array, counts_to_save)
         
-        # 将当前内存中的 grid (list) 转回 numpy 数组以符合工具类要求
-        color_array = np.array(current_state['grid'], dtype=object)
-        color_code_count = current_state['color_code_count']
+        # 关键：更新当前的上下文 ID，以便跳转后 draw_page 能找到它
+        global CURRENT_DRAWING_ID
+        CURRENT_DRAWING_ID = drawing_id 
         
-        # 调用工具类函数保存到 ./data/DrawingData/{id}.db
-        save_drawing_to_sqlite(drawing_id, color_array, color_code_count)
-        
-        return jsonify({
-            "status": "success", 
-            "msg": f"图纸源数据已保存", 
-            "drawing_id": drawing_id
-        })
+        return jsonify({"status": "success", "msg": "图纸源数据已保存", "drawing_id": drawing_id})
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
 
+#下载图纸源数据对应的可视化图片
+
+    # 从数据库读取
+    grid_array, color_code_count = load_drawing_from_sqlite(CURRENT_DRAWING_ID)
+    
+    if grid_array is None:
+        return "无可下载的数据", 404
+
+    # --- 核心修复：强制转换为 NumPy 数组 ---
+    # 确保 grid_array 是 (H, W, 1) 或 (H, W) 的 NumPy 结构
+    grid_array = np.array(grid_array)
+
+    from image_utils import _COLOR_CACHE
+    # 确保缓存存在，否则提供备选逻辑
+    if _COLOR_CACHE and 'full_rows' in _COLOR_CACHE:
+        palette_map = {str(row[0]): [int(row[1]), int(row[2]), int(row[3])] for row in _COLOR_CACHE['full_rows']}
+    else:
+        # 备选：如果缓存失效，从当前图纸统计信息中构建一个临时调色盘
+        palette_map = {str(k): [v['r_rgb'], v['g_rgb'], v['b_rgb']] for k, v in color_code_count.items()}
+    
+    # 渲染图片
+    try:
+        img = visualize_color_array(grid_array, palette_map, pixel_scale=20) 
+        
+        output_path = os.path.join(app.config['OUTPUT_FOLDER'], f"export_{CURRENT_DRAWING_ID}.png")
+        img.save(output_path)
+        
+        return send_file(output_path, as_attachment=True)
+    except Exception as e:
+        return f"生成图片失败: {str(e)}", 500
+
+@app.route('/download_modified')
+def download_modified():
+    # 1. 从数据库加载数据
+    grid_array, color_code_count = load_drawing_from_sqlite(CURRENT_DRAWING_ID)
+    
+    if grid_array is None:
+        return "无可下载的数据", 404
+
+    grid_array = np.array(grid_array)
+    if grid_array.ndim == 2:
+        grid_array = grid_array[:, :, np.newaxis]
+
+    from image_utils import _COLOR_CACHE, init_color_cache
+    
+    if _COLOR_CACHE is None:
+        init_color_cache(current_color_db) 
+
+    try:
+        img = visualize_color_array(grid_array, color_code_count, pixel_scale=20) 
+        
+        output_path = os.path.join(app.config['OUTPUT_FOLDER'], f"export_{CURRENT_DRAWING_ID}.png")
+        img.save(output_path)
+        
+        return send_file(output_path, as_attachment=True)
+    except Exception as e:
+        print(f"渲染下载图纸时出错: {e}")
+        return f"生成图片失败: {str(e)}", 500
 
 #————————————————————————————————————————#
 #          交互修改图纸
@@ -224,10 +281,17 @@ def draw_page():
         for row in _COLOR_CACHE['full_rows']:
             palette[str(row[0])] = [int(row[1]), int(row[2]), int(row[3])]
 
+    drawings_dir = './data/DrawingData'
+    if not os.path.exists(drawings_dir):
+        os.makedirs(drawings_dir)
+    # 获取文件名（不带.db后缀）
+    drawings = [f[:-3] for f in os.listdir(drawings_dir) if f.endswith('.db')]
+
     return render_template('draw_page.html', 
-                           grid=grid_array.tolist(), 
-                           palette=palette,
-                           color_counts=color_code_count)
+                        grid=grid_array.tolist(), 
+                        palette=palette,
+                        color_counts=color_code_count,
+                        drawings=drawings) # 传递给模板
 
 # 新建空白图纸
 @app.route('/api/create_blank', methods=['POST'])

@@ -247,109 +247,155 @@
                     {% set filename = processed_image.split('/')[-1] %}
                     <a href="{{ url_for('download_file', filename=filename) }}" class="download-btn">下载处理后图片</a>
                 </div>
-                <div class="nav-btn-box">
-                    <a href="{{ url_for('draw_page') }}" class="btn-draw-large">
-                        🎨 进入交互式绘图修改
-                    </a>
-                </div>
+                 <button type="button" class="btn" style="background-color: #28a745; color: white;" onclick="handleSaveData()">保存图纸源数据</button>
+            
+                <button type="button" class="btn btn-primary" onclick="handleGoToDraw()">进入交互式绘图修改</button>
+
             </div>
 
             {% endif %}
         </div>
        
-        
-
+       
     </div>
 
-  <script>
-    document.addEventListener('DOMContentLoaded', function() {
-    const form = document.getElementById('uploadForm');
-    const fileInput = document.getElementById('file');
-    const reduceCheckbox = document.getElementById('reduce_colors');
-    const reduceProCheckbox = document.getElementById('reduce_colors_Pro');
-    const colorCountGroup = document.getElementById('color_count_group');
-    const resultSection = document.getElementById('resultSection');
-    const submitBtn = form.querySelector('button');
+    <script>
+        // 定义全局状态变量
+        let isSaved = false;
+        let currentDrawingId = "";
 
-    // 用于持久化记录用户选择的文件
-    let lastSelectedFile = null;
-
-    // --- 1. 互斥与显示逻辑 ---
-    function updateColorGroup() {
-        colorCountGroup.style.display = (reduceCheckbox.checked || reduceProCheckbox.checked) ? 'block' : 'none';
-    }
-
-    reduceCheckbox.addEventListener('change', function() {
-        if (this.checked) reduceProCheckbox.checked = false;
-        updateColorGroup();
-    });
-
-    reduceProCheckbox.addEventListener('change', function() {
-        if (this.checked) reduceCheckbox.checked = false;
-        updateColorGroup();
-    });
-
-    // --- 2. 文件状态记录 ---
-    fileInput.addEventListener('change', function() {
-        if (this.files && this.files[0]) {
-            lastSelectedFile = this.files[0];
-            console.log("已记录文件:", lastSelectedFile.name);
-        }
-    });
-
-    // --- 3. 核心 AJAX 提交逻辑 ---
-    form.addEventListener('submit', function(e) {
-        e.preventDefault();
-
-        // 验证文件：如果 input 为空但我们有记录，则可以使用
-        if (!fileInput.files[0] && !lastSelectedFile) {
-            alert("请先选择一张图片");
-            return;
-        }
-
-        // 显示加载状态
-        const originalBtnText = submitBtn.innerText;
-        submitBtn.disabled = true;
-        submitBtn.innerText = '正在处理中...';
-
-        const formData = new FormData(form);
-        
-        // 【关键】如果没有新选文件，把记录的旧文件塞进去
-        if (!fileInput.files[0] && lastSelectedFile) {
-            formData.set('file', lastSelectedFile);
-        }
-
-        fetch(window.location.href, {
-            method: 'POST',
-            body: formData
-        })
-        .then(response => response.text())
-        .then(html => {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-            const newResult = doc.getElementById('resultSection');
+        document.addEventListener('DOMContentLoaded', function() {
+            const form = document.getElementById('uploadForm');
+            const fileInput = document.getElementById('file');
+            const reduceCheckbox = document.getElementById('reduce_colors');
+            const reduceProCheckbox = document.getElementById('reduce_colors_Pro');
+            const colorCountGroup = document.getElementById('color_count_group');
+            const resultSection = document.getElementById('resultSection');
+            const submitBtn = form.querySelector('button');
             
-            if (newResult) {
-                resultSection.innerHTML = newResult.innerHTML;
-                resultSection.classList.add('show');
-                // 自动滚动到结果区
-                resultSection.scrollIntoView({ behavior: 'smooth' });
+            let lastSelectedFile = null;
+
+            // --- 1. 互斥与显示逻辑 ---
+            function updateColorGroup() {
+                colorCountGroup.style.display = (reduceCheckbox.checked || reduceProCheckbox.checked) ? 'block' : 'none';
             }
 
-            const errorMsg = doc.querySelector('.error-message');
-            if (errorMsg) alert(errorMsg.innerText);
-        })
-        .catch(err => {
-            console.error(err);
-            alert('处理失败，请稍后重试');
-        })
-        .finally(() => {
-            submitBtn.disabled = false;
-            submitBtn.innerText = originalBtnText;
-        });
-    });
-});
-  </script>
+            reduceCheckbox.addEventListener('change', function() {
+                if (this.checked) reduceProCheckbox.checked = false;
+                updateColorGroup();
+            });
+
+            reduceProCheckbox.addEventListener('change', function() {
+                if (this.checked) reduceCheckbox.checked = false;
+                updateColorGroup();
+            });
+
+            // --- 2. 文件状态记录 ---
+            fileInput.addEventListener('change', function() {
+                if (this.files && this.files[0]) {
+                    lastSelectedFile = this.files[0];
+                }
+            });
+
+            // --- 3. 核心 AJAX 提交逻辑 ---
+            form.addEventListener('submit', function(e) {
+                e.preventDefault();
+
+                if (!fileInput.files[0] && !lastSelectedFile) {
+                    alert("请先选择一张图片");
+                    return;
+                }
+
+                const originalBtnText = submitBtn.innerText;
+                submitBtn.disabled = true;
+                submitBtn.innerText = '正在处理中...';
+
+                const formData = new FormData(form);
+                if (!fileInput.files[0] && lastSelectedFile) {
+                    formData.set('file', lastSelectedFile);
+                }
+
+                fetch(window.location.href, {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.text())
+                .then(html => {
+                    // 重置保存状态
+                    isSaved = false; 
+                    currentDrawingId = "";
+
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    const newResult = doc.getElementById('resultSection');
+                    
+                    if (newResult) {
+                        resultSection.innerHTML = newResult.innerHTML;
+                        resultSection.classList.add('show');
+                        resultSection.scrollIntoView({ behavior: 'smooth' });
+                    }
+
+                    const errorMsg = doc.querySelector('.error-message');
+                    if (errorMsg) alert(errorMsg.innerText);
+                })
+                .catch(err => {
+                    console.error(err);
+                    alert('处理失败，请稍后重试');
+                })
+                .finally(() => {
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = originalBtnText;
+                });
+            });
+        }); // DOMContentLoaded 闭合
+
+        // --- 4. 全局保存与跳转函数 (放在外面，确保 onclick 能找到) ---
+        async function handleSaveData() {
+            if (isSaved) {
+                alert("该图纸已保存，ID 为: " + currentDrawingId);
+                return true;
+            }
+
+            const drawingId = prompt("请为该图纸源数据命名（仅限英文/数字）", "drawing_" + Date.now().toString().slice(-6));
+            if (!drawingId) return false;
+
+            try {
+                const resp = await fetch('/api/save_modified', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ drawing_id: drawingId })
+                });
+                const result = await resp.json();
+                
+                if (result.status === 'success') {
+                    isSaved = true;
+                    currentDrawingId = drawingId;
+                    alert("图纸源数据保存成功！");
+                    return true;
+                } else {
+                    alert("保存失败: " + result.msg);
+                    return false;
+                }
+            } catch (e) {
+                alert("网络请求出错");
+                return false;
+            }
+        }
+
+        async function handleGoToDraw() {
+            if (!isSaved) {
+                const confirmed = confirm("进入绘图前需要先保存图纸源数据。现在保存吗？");
+                if (confirmed) {
+                    const success = await handleSaveData();
+                    if (!success) return; 
+                } else {
+                    return; 
+                }
+            }
+            window.location.href = "{{ url_for('draw_page') }}";
+        }
+    </script>
 
 </body>
+
 </html>

@@ -74,8 +74,23 @@
 
         <div class="step-box">
             <div class="step-title"><span class="step-num">2</span> 裁剪图纸</div>
+            <div class="form-check form-switch mb-2 small">
+                <input class="form-check-switch" type="checkbox" id="crop-mode-toggle" onchange="updateCropUI()">
+                <label class="form-check-label" for="crop-mode-toggle">开启指定大小模式</label>
+            </div>
+            
+            <div id="fixed-size-inputs" class="input-group input-group-sm mb-2 d-none">
+                <span class="input-group-text">宽</span>
+                <input type="number" id="crop-w" class="form-control" value="32">
+                <span class="input-group-text">高</span>
+                <input type="number" id="crop-h" class="form-control" value="40">
+            </div>
+            
             <button id="crop-btn" class="btn btn-warning btn-sm w-100" onclick="toggleCropMode()">进入裁剪模式</button>
-            <p id="crop-tip" class="small text-danger mt-1 d-none">在图纸上拖动鼠标选择范围</p>
+            <p id="crop-tip" class="small text-danger mt-1 d-none">
+                <span id="tip-free">拖动鼠标选择范围</span>
+                <span id="tip-fixed" class="d-none">点击位置作为左上角进行裁剪</span>
+            </p>
         </div>
 
         <div class="step-box">
@@ -125,6 +140,11 @@
     let isCropMode = false;
     let cropStart = null; // {x, y}
     let cropEnd = null;
+    let highlightId = null; // 当前高亮的色号
+
+    const FIXED_CROP_W = 32; // 固定裁剪宽度
+    const FIXED_CROP_H = 40; // 固定裁剪高度
+
 
     const canvas = document.getElementById('mainCanvas');
     const ctx = canvas.getContext('2d');
@@ -146,9 +166,14 @@
                 
                 ctx.fillStyle = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
                 ctx.fillRect(c * currentCellSize, r * currentCellSize, currentCellSize, currentCellSize);
-
-                if (zoom > 0.5) {
+                
+                if (!isCropMode && highlightId !== null && code === String(highlightId)) {
+                ctx.strokeStyle = "#ff0000"; // 高亮颜色：红色
+                ctx.lineWidth = 3;
+                ctx.strokeRect(c * currentCellSize + 1, r * currentCellSize + 1, currentCellSize - 2, currentCellSize - 2);
+                } else if (zoom > 0.5) {
                     ctx.strokeStyle = "rgba(0,0,0,0.1)";
+                    ctx.lineWidth = 1;
                     ctx.strokeRect(c * currentCellSize, r * currentCellSize, currentCellSize, currentCellSize);
                 }
 
@@ -164,18 +189,38 @@
         }
 
         // 绘制裁剪预览框
-        if (isCropMode && cropStart && cropEnd) {
-            ctx.strokeStyle = "yellow";
-            ctx.lineWidth = 4;
-            const x = Math.min(cropStart.x, cropEnd.x) * currentCellSize;
-            const y = Math.min(cropStart.y, cropEnd.y) * currentCellSize;
-            const w = (Math.abs(cropEnd.x - cropStart.x) + 1) * currentCellSize;
-            const h = (Math.abs(cropEnd.y - cropStart.y) + 1) * currentCellSize;
-            ctx.strokeRect(x, y, w, h);
-            ctx.fillStyle = "rgba(255, 255, 0, 0.2)";
-            ctx.fillRect(x, y, w, h);
+        if (isCropMode && cropStart) {
+            const isFixed = document.getElementById('crop-mode-toggle').checked;
+            let rectW, rectH;
+
+            if (isFixed) {
+                rectW = (parseInt(document.getElementById('crop-w').value) || 32) * currentCellSize;
+                rectH = (parseInt(document.getElementById('crop-h').value) || 40) * currentCellSize;
+            } else if (cropEnd) {
+                rectW = (Math.abs(cropEnd.x - cropStart.x) + 1) * currentCellSize;
+                rectH = (Math.abs(cropEnd.y - cropStart.y) + 1) * currentCellSize;
+            }
+
+            if (rectW && rectH) {
+                const drawX = isFixed ? cropStart.x : Math.min(cropStart.x, cropEnd.x);
+                const drawY = isFixed ? cropStart.y : Math.min(cropStart.y, cropEnd.y);
+                
+                ctx.strokeStyle = "yellow";
+                ctx.lineWidth = 4;
+                ctx.strokeRect(drawX * currentCellSize, drawY * currentCellSize, rectW, rectH);
+                ctx.fillStyle = "rgba(255, 255, 0, 0.2)";
+                ctx.fillRect(drawX * currentCellSize, drawY * currentCellSize, rectW, rectH);
+            }
         }
     }
+
+    // 剪裁 UI 更新
+    function updateCropUI() {
+    const isFixed = document.getElementById('crop-mode-toggle').checked;
+    document.getElementById('fixed-size-inputs').classList.toggle('d-none', !isFixed);
+    document.getElementById('tip-free').classList.toggle('d-none', isFixed);
+    document.getElementById('tip-fixed').classList.toggle('d-none', !isFixed);
+}
 
     // 统计 UI 更新
     function updateStatsUI() {
@@ -193,6 +238,8 @@
                 <span style="flex:1"><strong>${id}</strong></span>
                 <span class="badge bg-secondary">${item.count}</span>
             `;
+            div.onmouseenter = () => { highlightId = id; render(); };
+            div.onmouseleave = () => { highlightId = null; render(); };
             container.appendChild(div);
         });
         document.getElementById('total-info').innerText = `(${total}格)`;
@@ -218,34 +265,66 @@
 
         if (isCropMode) {
             cropStart = {x, y};
-            cropEnd = {x, y};
+            // 自由选区模式下，按下鼠标即开始
+            if (!document.getElementById('crop-mode-toggle').checked) {
+                cropEnd = {x, y};
+            }
         }
     };
 
     canvas.onmousemove = (e) => {
-        if (!isCropMode || !cropStart) return;
-        const rect = canvas.getBoundingClientRect();
-        const curSize = baseCellSize * zoom;
-        cropEnd = {
-            x: Math.floor((e.clientX - rect.left) / curSize),
-            y: Math.floor((e.clientY - rect.top) / curSize)
-        };
-        render();
-    };
+    const rect = canvas.getBoundingClientRect();
+    const curSize = baseCellSize * zoom;
+    const x = Math.floor((e.clientX - rect.left) / curSize);
+    const y = Math.floor((e.clientY - rect.top) / curSize);
+
+    // 边界检查
+    if (y < 0 || y >= grid.length || x < 0 || x >= grid[0].length) return;
+
+    if (isCropMode) {
+        // 裁剪模式：关闭高亮模式
+        highlightId = null; // 裁剪时关闭高亮
+        const isFixed = document.getElementById('crop-mode-toggle').checked;
+        if (isFixed) {
+            cropStart = {x, y};
+        } else if (cropStart) {
+            cropEnd = {x, y};
+        }
+    } else {
+        //非剪裁模式&&同色替换模式：同色边框高亮
+        if (editMode === 'batch') {
+            highlightId = String(grid[y][x][0]);
+        } else {
+            highlightId = null;
+        }
+    }
+    render(); // 统一触发重绘
+};
 
     canvas.onmouseup = async (e) => {
-        if (isCropMode && cropStart && cropEnd) {
-            if (confirm("确定要裁剪此区域吗？")) {
-                const body = {
-                    x1: Math.min(cropStart.x, cropEnd.x),
-                    y1: Math.min(cropStart.y, cropEnd.y),
-                    x2: Math.max(cropStart.x, cropEnd.x),
-                    y2: Math.max(cropStart.y, cropEnd.y)
-                };
+        if (isCropMode && cropStart) {
+            const isFixed = document.getElementById('crop-mode-toggle').checked;
+            let x1, y1, x2, y2;
+
+            if (isFixed) {
+                const userW = parseInt(document.getElementById('crop-w').value) || 32;
+                const userH = parseInt(document.getElementById('crop-h').value) || 40;
+                x1 = cropStart.x;
+                y1 = cropStart.y;
+                x2 = x1 + userW - 1;
+                y2 = y1 + userH - 1;
+            } else if (cropEnd) {
+                x1 = Math.min(cropStart.x, cropEnd.x);
+                y1 = Math.min(cropStart.y, cropEnd.y);
+                x2 = Math.max(cropStart.x, cropEnd.x);
+                y2 = Math.max(cropStart.y, cropEnd.y);
+            }
+
+            if (confirm(`确定裁剪该区域吗？`)) {
                 const resp = await fetch('/api/crop_drawing', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(body)
+                    body: JSON.stringify({ x1, y1, x2, y2 })
                 });
                 if (resp.ok) location.reload();
             }
@@ -256,6 +335,10 @@
         }
     };
 
+    canvas.onmouseleave = () => {
+        highlightId = null;
+        render();
+    };
     // 普通点击修改
     async function handlePixelClick(e) {
         if (!targetData.id) return alert("请先选择目标色号");
