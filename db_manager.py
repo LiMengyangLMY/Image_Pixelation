@@ -10,80 +10,77 @@ def get_db_path(drawing_id):
     return os.path.join(DB_DIR, f"{drawing_id}.db")
 
 #单格替换+更新数据库
-def update_pixel_in_db(drawing_id, r, c, new_id):
-    """
-    单点像素修改：在事务中同步更新 grid 像素和 metadata 计数
-    修复：新颜色 ID 继承旧颜色的 RGB/Lab 属性
-    """
-    new_id = str(new_id)
-    db_path = f'./data/DrawingData/{drawing_id}.db'
+# db_manager.py
+
+def update_pixel_in_db(drawing_id, r, c, new_id, l_lab=0, a_lab=0, b_lab=0, r_rgb=0, g_rgb=0, b_rgb=0):
+    # 1. 统一 ID 格式（去除空格）
+    new_id = str(new_id).strip()
+    
+    db_path = get_db_path(drawing_id)
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
     try:
-        # 1. 开启事务
         cursor.execute('BEGIN TRANSACTION;')
 
-        # 2. 获取该坐标原有的颜色 ID
-        cursor.execute('SELECT color_id FROM grid WHERE r = ? AND c = ?', (r, c))
+        # 2. 获取旧像素信息
+        cursor.execute('SELECT color_id FROM grid WHERE r = ? AND c = ?', (int(r), int(c)))
         result = cursor.fetchone()
-        if not result:
+        
+        # 3. 读取现有元数据
+        cursor.execute("SELECT value FROM metadata WHERE key='color_code_count'")
+        meta_row = cursor.fetchone()
+        if not meta_row:
             return None
-        old_id = str(result[0])
+        meta_data = json.loads(meta_row[0])
 
-        # 如果颜色没变，直接跳过
+        if not result:
+            return meta_data
+        
+        old_id = str(result[0]).strip()
+
+        # 如果颜色没变，直接返回
         if old_id == new_id:
             conn.commit()
-            return None
+            return meta_data
 
-        # 3. 更新 grid 表物理像素
-        cursor.execute('UPDATE grid SET color_id = ? WHERE r = ? AND c = ?', (new_id, r, c))
+        # 4. 更新物理网格表
+        cursor.execute('UPDATE grid SET color_id = ? WHERE r = ? AND c = ?', (new_id, int(r), int(c)))
 
-        # 4. 读取 metadata 进行逻辑更新
-        cursor.execute("SELECT value FROM metadata WHERE key='color_code_count'")
-        meta_data = json.loads(cursor.fetchone()[0])
-
+        # 5. 更新 Metadata 逻辑
+        # A. 旧颜色计数减 1
         if old_id in meta_data:
-            # 获取旧颜色信息
-            old_info = meta_data[old_id]
-            
-            # 旧颜色计数 -1
-            old_info['count'] -= 1
-            
-            # 更新新颜色的统计
-            if new_id in meta_data:
-                meta_data[new_id]['count'] += 1
-            else:
-                # 修复逻辑错误：参考 batch_update_in_db，继承旧颜色的视觉属性
-                meta_data[new_id] = {
-                    "count": 1,
-                    "r_rgb": old_info.get('r_rgb', 0),
-                    "g_rgb": old_info.get('g_rgb', 0),
-                    "b_rgb": old_info.get('b_rgb', 0),
-                    "l_lab": old_info.get('l_lab', 0),
-                    "a_lab": old_info.get('a_lab', 0),
-                    "b_lab": old_info.get('b_lab', 0)
-                }
+            meta_data[old_id]['count'] = max(0, meta_data[old_id]['count'] - 1)
+            # 如果计数归零，建议保留 Key 以维持色板完整，或根据需求 del
+            if meta_data[old_id]['count'] == 0:
+                pass 
 
-            # 如果旧颜色数量归零，建议像 batch_update 一样视情况移除或保留
-            if old_info['count'] <= 0:
-                # 如果你想保持 metadata 简洁，可以 pop 掉：meta_data.pop(old_id)
-                # 否则保留 count 为 0
-                old_info['count'] = 0
+        # B. 新颜色计数加 1
+        if new_id in meta_data:
+            meta_data[new_id]['count'] += 1
+            # 可选：如果传入了值，也可以在此更新该颜色的最新 Lab/RGB
+        else:
+            # 如果是一个图纸中从未出现过的新颜色，创建对应条目
+            meta_data[new_id] = {
+                "count": 1,
+                "r_rgb": int(r_rgb), "g_rgb": int(g_rgb), "b_rgb": int(b_rgb),
+                "l_lab": float(l_lab), "a_lab": float(a_lab), "b_lab": float(b_lab)
+            }
 
-        # 5. 写回更新后的元数据
-        cursor.execute('UPDATE metadata SET value = ? WHERE key = ?', (json.dumps(meta_data), 'color_code_count'))
-
-        # 6. 提交事务
+        # 6. 写回数据库并提交
+        cursor.execute('UPDATE metadata SET value = ? WHERE key = ?', 
+                       (json.dumps(meta_data), 'color_code_count'))
+        
         conn.commit()
         return meta_data
 
     except Exception as e:
         conn.rollback()
-        print(f"单点更新失败: {e}")
+        print(f"数据库更新失败: {e}")
         return None
     finally:
         conn.close()
+
 
 #同色替换+更新数据库
 def batch_update_in_db(drawing_id, old_id, new_id):

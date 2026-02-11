@@ -105,10 +105,13 @@
 
         <div class="step-box">
             <div class="step-title"><span class="step-num">4</span> 目标色号</div>
-            <div id="palette-list" class="palette-container">
-                {% for id, rgb in palette.items() %}
-                <div class="swatch-wrapper" onclick="setTarget('{{id}}', [{{rgb[0]}},{{rgb[1]}},{{rgb[2]}}], this)">
-                    <div class="swatch-item" style="background: rgb({{rgb[0]}},{{rgb[1]}},{{rgb[2]}});"></div>
+               <div id="palette-list" class="palette-container">
+                {# 这里改用 palette 进行遍历，以显示色库中的所有颜色 #}
+                {% for id, info in palette.items() %}
+                <div class="swatch-wrapper" 
+                    id="swatch-{{id}}"
+                    onclick="setTarget('{{id}}', [{{info.r_rgb}},{{info.g_rgb}},{{info.b_rgb}}], [{{info.l_lab}},{{info.a_lab}},{{info.b_lab}}], this)">
+                    <div class="swatch-item" style="background: rgb({{info.r_rgb}},{{info.g_rgb}},{{info.b_rgb}});"></div>
                     <div class="swatch-id">{{id}}</div>
                 </div>
                 {% endfor %}
@@ -134,7 +137,6 @@
     let baseCellSize = 30; 
     let zoom = 1.0;
     let editMode = 'single'; 
-    let targetData = { id: null, rgb: [0, 0, 0] };
     
     // 裁剪相关状态
     let isCropMode = false;
@@ -149,11 +151,97 @@
     const canvas = document.getElementById('mainCanvas');
     const ctx = canvas.getContext('2d');
 
+
+    // 修改目标数据结构
+    let targetData = { id: null, rgb: [0, 0, 0], lab: [0, 0, 0] };
+
+    // 确保它能处理 4 个参数
+    function setTarget(id, rgb, lab, el) {
+        if (!el) return; // 安全检查
+
+        targetData = { 
+            id: String(id), 
+            rgb: rgb, 
+            lab: lab 
+        }; 
+        document.querySelectorAll('.swatch-wrapper').forEach(w => w.classList.remove('active'));
+        el.classList.add('active');
+ 
+        document.getElementById('target-id-display').innerText = id;
+    }
+
+    // 修改像素点击处理函数
+    async function handlePixelClick(e) {
+        if (!targetData.id) return alert("请先选择目标色号");
+        
+        const rect = canvas.getBoundingClientRect();
+        const curSize = baseCellSize * zoom;
+        const col = Math.floor((e.clientX - rect.left) / curSize);
+        const row = Math.floor((e.clientY - rect.top) / curSize);
+        
+        const oldId = String(grid[row][col][0]);
+        const newId = String(targetData.id);
+        if (oldId === newId) return;
+
+        const path = editMode === 'single' ? '/api/update_pixel' : '/api/batch_update';
+        
+        // 构建请求体，包含 LAB 和 RGB
+        const body = {
+            r: row,
+            c: col,
+            old_id: oldId, // 批量替换需要
+            new_id: newId,
+            // 传入当前选中的颜色属性
+            l_lab: targetData.lab[0],
+            a_lab: targetData.lab[1],
+            b_lab: targetData.lab[2],
+            r_rgb: targetData.rgb[0],
+            g_rgb: targetData.rgb[1],
+            b_rgb: targetData.rgb[2]
+        };
+
+        try {
+            const resp = await fetch(path, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body)
+            });
+
+            if (resp.ok) {
+                const data = await resp.json();
+                // 后端应返回完整的 new_counts (即更新后的 meta_data)
+                if (data && data.new_counts) {
+                    // 更新本地网格数据
+                    if (editMode === 'single') {
+                        grid[row][col] = [newId];
+                    } else {
+                        for(let r=0; r<grid.length; r++)
+                            for(let c=0; c<grid[0].length; c++)
+                                if(String(grid[r][c][0]) === oldId) grid[r][c] = [newId];
+                    }
+                    
+                    // 核心：使用后端返回的最新 metadata 更新 UI
+                    colorCounts = data.new_counts;
+                    updateStatsUI(); 
+                    render();
+                } else {
+                    console.error("Metadata update failed: Server returned null");
+                }
+            }
+        } catch (err) {
+            console.error("Network error:", err);
+        }
+    }
+
     // 渲染核心
     function render() {
         if (!grid || grid.length === 0) return;
+        
         const rows = grid.length;
-        const cols = grid[0].length;
+        // 安全检查：防止 grid[0] 不存在
+        const cols = grid[0] ? grid[0].length : 0; 
+        if (cols === 0) return;
+
         const currentCellSize = baseCellSize * zoom;
         
         canvas.width = cols * currentCellSize;
@@ -161,26 +249,57 @@
 
         for (let r = 0; r < rows; r++) {
             for (let c = 0; c < cols; c++) {
-                const code = String(grid[r][c][0]);
-                const rgb = palette[code] || [240, 240, 240];
+                // 1. 获取 ID：兼容 3维数组 [['1']] 和 2维数组 ['1']
+                let rawCell = grid[r][c];
+                const code = Array.isArray(rawCell) ? String(rawCell[0]) : String(rawCell);
+
+                // 2. 获取颜色对象
+                const colorInfo = palette[code];
                 
-                ctx.fillStyle = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+                // 3. 解析 RGB：区分后端传回的是 对象 还是 数组，并提供默认值
+                let rVal, gVal, bVal;
+                
+                if (colorInfo) {
+                    // 如果后端传的是对象 {r_rgb: 255...}
+                    if (colorInfo.r_rgb !== undefined) {
+                        rVal = colorInfo.r_rgb;
+                        gVal = colorInfo.g_rgb;
+                        bVal = colorInfo.b_rgb;
+                    } 
+                    // 如果后端传的是数组 [255, 0, 0] (兼容旧版逻辑)
+                    else if (Array.isArray(colorInfo)) {
+                        rVal = colorInfo[0];
+                        gVal = colorInfo[1];
+                        bVal = colorInfo[2];
+                    }
+                } else {
+                    // 默认背景色（浅灰）
+                    rVal = 240; gVal = 240; bVal = 240; 
+                }
+
+                // 4. 填充颜色
+                ctx.fillStyle = `rgb(${rVal}, ${gVal}, ${bVal})`;
                 ctx.fillRect(c * currentCellSize, r * currentCellSize, currentCellSize, currentCellSize);
                 
+                // 5. 绘制高亮边框（逻辑保持不变）
                 if (!isCropMode && highlightId !== null && code === String(highlightId)) {
-                ctx.strokeStyle = "#ff0000"; // 高亮颜色：红色
-                ctx.lineWidth = 3;
-                ctx.strokeRect(c * currentCellSize + 1, r * currentCellSize + 1, currentCellSize - 2, currentCellSize - 2);
+                    ctx.strokeStyle = "#ff0000"; 
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(c * currentCellSize + 1, r * currentCellSize + 1, currentCellSize - 2, currentCellSize - 2);
                 } else if (zoom > 0.5) {
                     ctx.strokeStyle = "rgba(0,0,0,0.1)";
                     ctx.lineWidth = 1;
                     ctx.strokeRect(c * currentCellSize, r * currentCellSize, currentCellSize, currentCellSize);
                 }
 
+                // 6. 绘制文字（数字）
                 if (currentCellSize > 18) {
-                    const brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
+                    // 计算亮度以决定文字颜色（黑/白）
+                    const brightness = (rVal * 299 + gVal * 587 + bVal * 114) / 1000;
                     ctx.fillStyle = brightness > 128 ? "#000" : "#fff";
-                    ctx.font = `${currentCellSize * 0.3}px Arial`;
+                    
+                    // 字体大小微调
+                    ctx.font = `${Math.max(10, currentCellSize * 0.4)}px Arial`;
                     ctx.textAlign = "center";
                     ctx.textBaseline = "middle";
                     ctx.fillText(code, c * currentCellSize + currentCellSize / 2, r * currentCellSize + currentCellSize / 2);
@@ -188,29 +307,30 @@
             }
         }
 
-        // 绘制裁剪预览框
+        // 绘制裁剪框（保持原样）
         if (isCropMode && cropStart) {
-            const isFixed = document.getElementById('crop-mode-toggle').checked;
-            let rectW, rectH;
+           // ... (你原来的裁剪框代码完全没问题，保留即可) ...
+           const isFixed = document.getElementById('crop-mode-toggle').checked;
+           let rectW, rectH;
 
-            if (isFixed) {
-                rectW = (parseInt(document.getElementById('crop-w').value) || 32) * currentCellSize;
-                rectH = (parseInt(document.getElementById('crop-h').value) || 40) * currentCellSize;
-            } else if (cropEnd) {
-                rectW = (Math.abs(cropEnd.x - cropStart.x) + 1) * currentCellSize;
-                rectH = (Math.abs(cropEnd.y - cropStart.y) + 1) * currentCellSize;
-            }
+           if (isFixed) {
+               rectW = (parseInt(document.getElementById('crop-w').value) || 32) * currentCellSize;
+               rectH = (parseInt(document.getElementById('crop-h').value) || 40) * currentCellSize;
+           } else if (cropEnd) {
+               rectW = (Math.abs(cropEnd.x - cropStart.x) + 1) * currentCellSize;
+               rectH = (Math.abs(cropEnd.y - cropStart.y) + 1) * currentCellSize;
+           }
 
-            if (rectW && rectH) {
-                const drawX = isFixed ? cropStart.x : Math.min(cropStart.x, cropEnd.x);
-                const drawY = isFixed ? cropStart.y : Math.min(cropStart.y, cropEnd.y);
-                
-                ctx.strokeStyle = "yellow";
-                ctx.lineWidth = 4;
-                ctx.strokeRect(drawX * currentCellSize, drawY * currentCellSize, rectW, rectH);
-                ctx.fillStyle = "rgba(255, 255, 0, 0.2)";
-                ctx.fillRect(drawX * currentCellSize, drawY * currentCellSize, rectW, rectH);
-            }
+           if (rectW && rectH) {
+               const drawX = isFixed ? cropStart.x : Math.min(cropStart.x, cropEnd.x);
+               const drawY = isFixed ? cropStart.y : Math.min(cropStart.y, cropEnd.y);
+               
+               ctx.strokeStyle = "yellow";
+               ctx.lineWidth = 4;
+               ctx.strokeRect(drawX * currentCellSize, drawY * currentCellSize, rectW, rectH);
+               ctx.fillStyle = "rgba(255, 255, 0, 0.2)";
+               ctx.fillRect(drawX * currentCellSize, drawY * currentCellSize, rectW, rectH);
+           }
         }
     }
 
@@ -339,41 +459,6 @@
         highlightId = null;
         render();
     };
-    // 普通点击修改
-    async function handlePixelClick(e) {
-        if (!targetData.id) return alert("请先选择目标色号");
-        const rect = canvas.getBoundingClientRect();
-        const curSize = baseCellSize * zoom;
-        const col = Math.floor((e.clientX - rect.left) / curSize);
-        const row = Math.floor((e.clientY - rect.top) / curSize);
-        
-        const oldId = String(grid[row][col][0]);
-        const newId = String(targetData.id);
-        if (oldId === newId) return;
-
-        const path = editMode === 'single' ? '/api/update_pixel' : '/api/batch_update';
-        const body = editMode === 'single' ? { r: row, c: col, new_id: newId } : { old_id: oldId, new_id: newId };
-
-        const resp = await fetch(path, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(body)
-        });
-
-        if (resp.ok) {
-            const data = await resp.json();
-            if (editMode === 'single') {
-                grid[row][col] = [newId];
-            } else {
-                for(let r=0; r<grid.length; r++)
-                    for(let c=0; c<grid[0].length; c++)
-                        if(String(grid[r][c][0]) === oldId) grid[r][c] = [newId];
-            }
-            colorCounts = data.new_counts;
-            updateStatsUI();
-            render();
-        }
-    }
 
     // 图纸库操作
     async function loadDrawing(id) {
@@ -402,12 +487,7 @@
 
     // 辅助功能
     function setMode(mode) { editMode = mode; }
-    function setTarget(id, rgb, el) {
-        targetData = { id, rgb };
-        document.querySelectorAll('.swatch-wrapper').forEach(w => w.classList.remove('active'));
-        el.classList.add('active');
-        document.getElementById('target-id-display').innerText = id;
-    }
+
     function adjustZoom(f) {
         zoom = Math.max(0.1, Math.min(5.0, zoom * f));
         document.getElementById('zoom-val').innerText = Math.round(zoom * 100);

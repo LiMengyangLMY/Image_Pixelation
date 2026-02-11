@@ -257,42 +257,39 @@ CURRENT_DRAWING_ID = 'last_converted'
 def draw_page():
     global temp_result_data
     
-    # 如果是从转换页跳过来的，先自动保存初始数据到数据库
     if temp_result_data.get('color_array') is not None:
-        save_drawing_to_sqlite(
-            CURRENT_DRAWING_ID, 
-            temp_result_data['color_array'], 
-            temp_result_data['color_code_count']
-        )
-        # 清空临时区防止重复触发保存
+        save_drawing_to_sqlite(CURRENT_DRAWING_ID, temp_result_data['color_array'], temp_result_data['color_code_count'])
         temp_result_data['color_array'] = None
 
-    # 统一从数据库加载“单点真相”
     grid_array, color_code_count = load_drawing_from_sqlite(CURRENT_DRAWING_ID)
-    
     if grid_array is None:
         return "图纸数据不存在，请先处理图片"
 
-    # 获取当前选中的调色盘数据库中的所有颜色，用于交互选择
-    # 注意：此处 current_color_db 应为您之前选中的 colors.db 路径
-    from image_utils import _COLOR_CACHE
+    from image_utils import _COLOR_CACHE, init_color_cache # 引入 init_color_cache
+    if _COLOR_CACHE is None:
+        init_color_cache(current_color_db) 
+        from image_utils import _COLOR_CACHE 
     palette = {}
     if _COLOR_CACHE:
         for row in _COLOR_CACHE['full_rows']:
-            palette[str(row[0])] = [int(row[1]), int(row[2]), int(row[3])]
+            color_id = str(row[0])
+            palette[color_id] = {
+                "r_rgb": int(row[1]),
+                "g_rgb": int(row[2]),
+                "b_rgb": int(row[3]),
+                "l_lab": float(row[4]),
+                "a_lab": float(row[5]),
+                "b_lab": float(row[6])
+            }
 
     drawings_dir = './data/DrawingData'
-    if not os.path.exists(drawings_dir):
-        os.makedirs(drawings_dir)
-    # 获取文件名（不带.db后缀）
-    drawings = [f[:-3] for f in os.listdir(drawings_dir) if f.endswith('.db')]
+    drawings = [f[:-3] for f in os.listdir(drawings_dir) if f.endswith('.db')] if os.path.exists(drawings_dir) else []
 
     return render_template('draw_page.html', 
-                        grid=grid_array.tolist(), 
-                        palette=palette,
-                        color_counts=color_code_count,
-                        drawings=drawings) # 传递给模板
-
+                            grid=grid_array.tolist(), 
+                            palette=palette,         
+                            color_counts=color_code_count,
+                            drawings=drawings)
 # 新建空白图纸
 @app.route('/api/create_blank', methods=['POST'])
 def create_blank():
@@ -372,16 +369,32 @@ def load_drawing_api():
 @app.route('/api/update_pixel', methods=['POST'])
 def update_pixel():
     data = request.json
-    r, c = int(data['r']), int(data['c'])
-    new_id = str(data['new_id'])
-    
-    new_counts = update_pixel_in_db(CURRENT_DRAWING_ID, r, c, new_id)
-    
-    if new_counts is not None:
-        return jsonify({"status": "success", "new_counts": new_counts})
-    else:
-        return jsonify({"status": "error", "msg": "更新失败"}), 500
-
+    try:
+        r, c = int(data['r']), int(data['c'])
+        new_id = str(data['new_id'])
+        
+        l_lab = data.get('l_lab', 0)
+        a_lab = data.get('a_lab', 0)
+        b_lab = data.get('b_lab', 0)
+        r_rgb = data.get('r_rgb', 0)
+        g_rgb = data.get('g_rgb', 0)
+        b_rgb = data.get('b_rgb', 0)
+        
+        # 调用更新函数，传入所有必要参数
+        new_counts = update_pixel_in_db(
+            CURRENT_DRAWING_ID, r, c, new_id,
+            l_lab=l_lab, a_lab=a_lab, b_lab=b_lab,
+            r_rgb=r_rgb, g_rgb=g_rgb, b_rgb=b_rgb
+        )
+        
+        if new_counts is not None:
+            return jsonify({"status": "success", "new_counts": new_counts})
+        else:
+            return jsonify({"status": "error", "msg": "更新失败或颜色未改变"}), 400
+            
+    except Exception as e:
+        print(f"API Error: {e}")
+        return jsonify({"status": "error", "msg": str(e)}), 500
 #同色替换
 @app.route('/api/batch_update', methods=['POST'])
 def batch_update():
