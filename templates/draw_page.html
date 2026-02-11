@@ -2,12 +2,12 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>交互式修改 - 颜色与编号视图</title>
+    <title>交互式修改 - 数据库实时版</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background: #f0f2f5; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
         .main-container { display: flex; flex: 1; overflow: hidden; }
-        #canvas-area { flex: 1; overflow: auto; background: #555; padding: 30px; display: flex; align-items: flex-start; justify-content: center; }
+        #canvas-area { flex: 1; overflow: auto; background: #555; padding: 30px; display: flex; align-items: flex-start; justify-content: center; position: relative; }
         canvas { background: #fff; box-shadow: 0 0 20px rgba(0,0,0,0.3); cursor: crosshair; }
         .sidebar { width: 340px; background: white; border-left: 1px solid #ddd; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; }
         
@@ -15,14 +15,13 @@
         .step-title { font-size: 0.9rem; font-weight: bold; color: #666; margin-bottom: 12px; display: flex; align-items: center; }
         .step-num { background: #0d6efd; color: white; width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; margin-right: 8px; }
         
-        .palette-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(30px, 1fr)); gap: 10px; max-height: 350px; overflow-y: auto; padding: 5px; }
+        .palette-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(30px, 1fr)); gap: 10px; max-height: 250px; overflow-y: auto; padding: 5px; }
         .swatch-wrapper { display: flex; flex-direction: column; align-items: center; cursor: pointer; }
         .swatch-item { width: 25px; height: 25px; border: 1px solid #ccc; border-radius: 4px; transition: all 0.1s; position: relative; }
         .swatch-id { font-size: 10px; color: #666; margin-top: 1px; font-weight: bold; }
         
         .swatch-wrapper:hover .swatch-item { transform: scale(1.1); border-color: #000; }
         .swatch-wrapper.active .swatch-item { border: 3px solid #0d6efd; box-shadow: 0 0 5px rgba(13,110,253,0.5); }
-        .swatch-wrapper.active .swatch-id { color: #0d6efd; }
         
         #stats-window {
             position: fixed; top: 80px; left: 20px; width: 220px;
@@ -31,21 +30,23 @@
             z-index: 1000; cursor: move;
         }
         .stats-header { background: #f8f9fa; padding: 8px 12px; border-bottom: 1px solid #eee; font-weight: bold; font-size: 13px; display: flex; justify-content: space-between; }
-        #stats-content { max-height: 300px; overflow-y: auto; padding: 10px; }
-        .stats-item { display: flex; align-items: center; margin-bottom: 6px; font-size: 12px; padding: 4px; border-radius: 4px; transition: background 0.2s; }
-        .stats-item:hover { background: #e9ecef; cursor: pointer; }
+        #stats-content { max-height: 250px; overflow-y: auto; padding: 10px; }
+        .stats-item { display: flex; align-items: center; margin-bottom: 6px; font-size: 12px; padding: 4px; border-radius: 4px; }
         .stats-dot { width: 14px; height: 14px; border-radius: 2px; margin-right: 8px; border: 1px solid #999; }
+        
+        /* 裁剪模式样式 */
+        .crop-active { cursor: nwse-resize !important; }
     </style>
 </head>
 <body>
 
 <nav class="navbar navbar-dark bg-dark px-3">
-    <span class="navbar-brand mb-0 h1">交互式绘图编辑器</span>
+    <span class="navbar-brand mb-0 h1">🎨 实时数据库绘图编辑器</span>
     <div class="d-flex align-items-center">
         <span class="text-light me-3 small">缩放: <span id="zoom-val">100</span>%</span>
         <button class="btn btn-outline-light btn-sm me-2" onclick="adjustZoom(1.2)">放大</button>
         <button class="btn btn-outline-light btn-sm me-2" onclick="adjustZoom(0.8)">缩小</button>
-        <a href="/download_modified" class="btn btn-success btn-sm">下载预览图片</a>
+        <button class="btn btn-success btn-sm" onclick="downloadPreview()">下载预览图</button>
     </div>
 </nav>
 
@@ -55,25 +56,44 @@
 </div>
 
 <div class="main-container">
-    <div id="canvas-area"><canvas id="mainCanvas"></canvas></div>
+    <div id="canvas-area">
+        <canvas id="mainCanvas"></canvas>
+    </div>
 
     <div class="sidebar">
         <div class="step-box">
-            <div class="step-title"><span class="step-num">1</span> 修改模式</div>
-            <div class="btn-group w-100" role="group">
+            <div class="step-title"><span class="step-num">1</span> 图纸库</div>
+            <select id="draw-selector" class="form-select form-select-sm mb-2" onchange="loadDrawing(this.value)">
+                <option value="">-- 选择已有图纸 --</option>
+                {% for d in drawings %}
+                <option value="{{d}}">{{d}}</option>
+                {% endfor %}
+            </select>
+            <button class="btn btn-outline-dark btn-sm w-100" onclick="showCreateModal()">🆕 新建空白图纸</button>
+        </div>
+
+        <div class="step-box">
+            <div class="step-title"><span class="step-num">2</span> 裁剪图纸</div>
+            <button id="crop-btn" class="btn btn-warning btn-sm w-100" onclick="toggleCropMode()">进入裁剪模式</button>
+            <p id="crop-tip" class="small text-danger mt-1 d-none">在图纸上拖动鼠标选择范围</p>
+        </div>
+
+        <div class="step-box">
+            <div class="step-title"><span class="step-num">3</span> 修改模式</div>
+            <div class="btn-group w-100">
                 <input type="radio" class="btn-check" name="mode" id="mode1" onclick="setMode('single')" checked>
-                <label class="btn btn-outline-primary btn-sm" for="mode1">单格替换</label>
+                <label class="btn btn-outline-primary btn-sm" for="mode1">单格</label>
                 <input type="radio" class="btn-check" name="mode" id="mode2" onclick="setMode('batch')">
-                <label class="btn btn-outline-primary btn-sm" for="mode2">同色全换</label>
+                <label class="btn btn-outline-primary btn-sm" for="mode2">全换</label>
             </div>
         </div>
 
         <div class="step-box">
-            <div class="step-title"><span class="step-num">2</span> 选择目标色号</div>
+            <div class="step-title"><span class="step-num">4</span> 目标色号</div>
             <div id="palette-list" class="palette-container">
                 {% for id, rgb in palette.items() %}
                 <div class="swatch-wrapper" onclick="setTarget('{{id}}', [{{rgb[0]}},{{rgb[1]}},{{rgb[2]}}], this)">
-                    <div class="swatch-item" style="background: rgb({{rgb[0]}},{{rgb[1]}},{{rgb[2]}});" title="色号: {{id}}"></div>
+                    <div class="swatch-item" style="background: rgb({{rgb[0]}},{{rgb[1]}},{{rgb[2]}});"></div>
                     <div class="swatch-id">{{id}}</div>
                 </div>
                 {% endfor %}
@@ -81,12 +101,6 @@
             <div class="mt-2 text-center">
                 <span id="target-id-display" class="badge bg-primary">未选择</span>
             </div>
-        </div>
-
-        <div class="step-box">
-            <div class="step-title"><span class="step-num">3</span> 保存操作</div>
-            <button class="btn btn-primary btn-sm w-100 mb-2" onclick="saveSourceData()">💾 保存图纸源数据(.db)</button>
-            <p class="x-small text-muted mb-0" style="font-size: 10px;">保存后可在后台重新加载此图纸的每一个方格信息。</p>
         </div>
 
         <div class="mt-auto">
@@ -97,8 +111,8 @@
 </div>
 
 <script>
-    // 1. 数据初始化
-    const grid = {{ grid|tojson }};
+    // 数据初始化
+    let grid = {{ grid|tojson }};
     const palette = {{ palette|tojson }};
     let colorCounts = {{ color_counts|tojson }};
     
@@ -106,12 +120,16 @@
     let zoom = 1.0;
     let editMode = 'single'; 
     let targetData = { id: null, rgb: [0, 0, 0] };
-    let hoveredId = null;
+    
+    // 裁剪相关状态
+    let isCropMode = false;
+    let cropStart = null; // {x, y}
+    let cropEnd = null;
 
     const canvas = document.getElementById('mainCanvas');
     const ctx = canvas.getContext('2d');
 
-    // 2. 渲染核心 (适配 grid 仅存 ID 的结构)
+    // 渲染核心
     function render() {
         if (!grid || grid.length === 0) return;
         const rows = grid.length;
@@ -120,28 +138,22 @@
         
         canvas.width = cols * currentCellSize;
         canvas.height = rows * currentCellSize;
-        ctx.imageSmoothingEnabled = false;
 
         for (let r = 0; r < rows; r++) {
             for (let c = 0; c < cols; c++) {
-                const code = String(grid[r][c][0]); // 关键修改：获取 ID
+                const code = String(grid[r][c][0]);
                 const rgb = palette[code] || [240, 240, 240];
-                const [rv, gv, bv] = rgb;
-
-                ctx.fillStyle = `rgb(${rv}, ${gv}, ${bv})`;
+                
+                ctx.fillStyle = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
                 ctx.fillRect(c * currentCellSize, r * currentCellSize, currentCellSize, currentCellSize);
 
-                if (hoveredId && code === String(hoveredId)) {
-                    ctx.strokeStyle = "#ff0000";
-                    ctx.lineWidth = 2;
-                    ctx.strokeRect(c * currentCellSize + 1, r * currentCellSize + 1, currentCellSize - 2, currentCellSize - 2);
-                } else if (zoom > 0.5) {
+                if (zoom > 0.5) {
                     ctx.strokeStyle = "rgba(0,0,0,0.1)";
                     ctx.strokeRect(c * currentCellSize, r * currentCellSize, currentCellSize, currentCellSize);
                 }
 
-                if (currentCellSize > 16) {
-                    const brightness = (rv * 299 + gv * 587 + bv * 114) / 1000;
+                if (currentCellSize > 18) {
+                    const brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
                     ctx.fillStyle = brightness > 128 ? "#000" : "#fff";
                     ctx.font = `${currentCellSize * 0.3}px Arial`;
                     ctx.textAlign = "center";
@@ -150,25 +162,32 @@
                 }
             }
         }
+
+        // 绘制裁剪预览框
+        if (isCropMode && cropStart && cropEnd) {
+            ctx.strokeStyle = "yellow";
+            ctx.lineWidth = 4;
+            const x = Math.min(cropStart.x, cropEnd.x) * currentCellSize;
+            const y = Math.min(cropStart.y, cropEnd.y) * currentCellSize;
+            const w = (Math.abs(cropEnd.x - cropStart.x) + 1) * currentCellSize;
+            const h = (Math.abs(cropEnd.y - cropStart.y) + 1) * currentCellSize;
+            ctx.strokeRect(x, y, w, h);
+            ctx.fillStyle = "rgba(255, 255, 0, 0.2)";
+            ctx.fillRect(x, y, w, h);
+        }
     }
 
-    // 3. 更新统计 UI (适配 r_rgb 字段)
+    // 统计 UI 更新
     function updateStatsUI() {
         const container = document.getElementById('stats-content');
         container.innerHTML = '';
         let total = 0;
-
-        Object.keys(colorCounts).sort().forEach(id => {
+        Object.keys(colorCounts).sort((a,b)=>parseInt(a)-parseInt(b)).forEach(id => {
             const item = colorCounts[id];
             total += item.count;
+            const r = item.r_rgb || 0, g = item.g_rgb || 0, b = item.b_rgb || 0;
             const div = document.createElement('div');
             div.className = 'stats-item';
-            div.onmouseenter = () => { hoveredId = id; render(); };
-            div.onmouseleave = () => { hoveredId = null; render(); };
-
-            // 使用 r_rgb, g_rgb, b_rgb
-            const r = item.r_rgb || 0, g = item.g_rgb || 0, b = item.b_rgb || 0;
-
             div.innerHTML = `
                 <div class="stats-dot" style="background: rgb(${r},${g},${b})"></div>
                 <span style="flex:1"><strong>${id}</strong></span>
@@ -179,18 +198,67 @@
         document.getElementById('total-info').innerText = `(${total}格)`;
     }
 
-    // 4. 交互逻辑
-    function setMode(mode) { editMode = mode; render(); }
-    function setTarget(id, rgb, el) {
-        targetData.id = id;
-        targetData.rgb = rgb;
-        document.querySelectorAll('.swatch-wrapper').forEach(w => w.classList.remove('active'));
-        el.classList.add('active');
-        document.getElementById('target-id-display').innerText = id;
+    // 交互逻辑：裁剪
+    function toggleCropMode() {
+        isCropMode = !isCropMode;
+        const btn = document.getElementById('crop-btn');
+        btn.className = isCropMode ? "btn btn-danger btn-sm w-100" : "btn btn-warning btn-sm w-100";
+        btn.innerText = isCropMode ? "取消裁剪" : "进入裁剪模式";
+        document.getElementById('crop-tip').classList.toggle('d-none');
+        canvas.classList.toggle('crop-active');
+        render();
     }
 
-    canvas.onclick = async (e) => {
-        if (!targetData.id) return alert("请先选择色号");
+    // 鼠标事件
+    canvas.onmousedown = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const curSize = baseCellSize * zoom;
+        const x = Math.floor((e.clientX - rect.left) / curSize);
+        const y = Math.floor((e.clientY - rect.top) / curSize);
+
+        if (isCropMode) {
+            cropStart = {x, y};
+            cropEnd = {x, y};
+        }
+    };
+
+    canvas.onmousemove = (e) => {
+        if (!isCropMode || !cropStart) return;
+        const rect = canvas.getBoundingClientRect();
+        const curSize = baseCellSize * zoom;
+        cropEnd = {
+            x: Math.floor((e.clientX - rect.left) / curSize),
+            y: Math.floor((e.clientY - rect.top) / curSize)
+        };
+        render();
+    };
+
+    canvas.onmouseup = async (e) => {
+        if (isCropMode && cropStart && cropEnd) {
+            if (confirm("确定要裁剪此区域吗？")) {
+                const body = {
+                    x1: Math.min(cropStart.x, cropEnd.x),
+                    y1: Math.min(cropStart.y, cropEnd.y),
+                    x2: Math.max(cropStart.x, cropEnd.x),
+                    y2: Math.max(cropStart.y, cropEnd.y)
+                };
+                const resp = await fetch('/api/crop_drawing', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body)
+                });
+                if (resp.ok) location.reload();
+            }
+            cropStart = null; cropEnd = null;
+            render();
+        } else if (!isCropMode) {
+            handlePixelClick(e);
+        }
+    };
+
+    // 普通点击修改
+    async function handlePixelClick(e) {
+        if (!targetData.id) return alert("请先选择目标色号");
         const rect = canvas.getBoundingClientRect();
         const curSize = baseCellSize * zoom;
         const col = Math.floor((e.clientX - rect.left) / curSize);
@@ -222,37 +290,49 @@
             updateStatsUI();
             render();
         }
-    };
+    }
 
-    // 保存图纸源数据功能
-    async function saveSourceData() {
-        const drawingId = prompt("请为该图纸命名（英文/数字）", "drawing_" + Date.now().toString().slice(-6));
-        if (!drawingId) return;
+    // 图纸库操作
+    async function loadDrawing(id) {
+        if(!id) return;
+        const resp = await fetch('/api/load_drawing', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ drawing_id: id })
+        });
+        if(resp.ok) location.reload();
+    }
 
-        try {
-            const resp = await fetch('/api/save_modified', {
+    async function showCreateModal() {
+        const name = prompt("图纸名称 (英文/数字):");
+        const w = prompt("宽度 (格):", "40");
+        const h = prompt("高度 (格):", "40");
+        if(name && w && h) {
+            const resp = await fetch('/api/create_blank', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ drawing_id: drawingId })
+                body: JSON.stringify({ drawing_id: name, width: w, height: h })
             });
-            const result = await resp.json();
-            if (result.status === 'success') {
-                alert("保存成功！图纸 ID: " + result.drawing_id);
-            } else {
-                alert("保存失败: " + result.msg);
-            }
-        } catch (e) {
-            alert("请求出错");
+            if(resp.ok) loadDrawing(name);
         }
     }
 
+    // 辅助功能
+    function setMode(mode) { editMode = mode; }
+    function setTarget(id, rgb, el) {
+        targetData = { id, rgb };
+        document.querySelectorAll('.swatch-wrapper').forEach(w => w.classList.remove('active'));
+        el.classList.add('active');
+        document.getElementById('target-id-display').innerText = id;
+    }
     function adjustZoom(f) {
-        zoom = Math.max(0.2, Math.min(5.0, zoom * f));
+        zoom = Math.max(0.1, Math.min(5.0, zoom * f));
         document.getElementById('zoom-val').innerText = Math.round(zoom * 100);
         render();
     }
+    function downloadPreview() { window.location.href = "/download_modified"; }
 
-    // 窗口拖拽
+    // 统计窗口拖拽
     const statsWin = document.getElementById("stats-window"), statsDrag = document.getElementById("stats-drag");
     let isDragging = false, offset = [0, 0];
     statsDrag.onmousedown = (e) => { isDragging = true; offset = [statsWin.offsetLeft - e.clientX, statsWin.offsetTop - e.clientY]; };

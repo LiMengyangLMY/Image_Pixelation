@@ -13,14 +13,18 @@ from werkzeug.utils import secure_filename
 from skimage import color as sk_color
 from PIL import Image
 
-# 从修复后的 image_utils 导入
+# image_utils 导入
 from image_utils import (
     save_drawing_to_sqlite, 
     reduce_image_colors_Pro, 
     process_image_with_color_code, 
     reduce_image_colors, 
-    visualize_color_array
+    visualize_color_array,
+    load_drawing_from_sqlite
 )
+# db_manager 导入
+from db_manager import update_pixel_in_db, batch_update_in_db, get_db_path
+
 
 #————————————————————————————————#
 #             全局变量            #
@@ -55,12 +59,18 @@ os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 
+#————————————————————————————————————————#
+#                  首页
+#————————————————————————————————————————#
 @app.route('/')
 def home():
     db_files = [f for f in os.listdir(COLOR_DB_DIR) if f.endswith('.db')]
     current_name = os.path.basename(current_color_db)
     return render_template('index.html', db_files=db_files, current=current_name)
 
+#————————————————————————————————————————#
+#              图片处理页面
+#————————————————————————————————————————#
 @app.route('/image_conversion', methods=['GET', 'POST'])
 def image_conversion():
     global temp_result_data
@@ -124,147 +134,10 @@ def image_conversion():
     
     return render_template('image_conversion.html')
 
-@app.route('/draw_page')
-def draw_page():
-    global current_state, temp_result_data
-    
-    if temp_result_data.get('color_array') is not None:
-        # 同步数据，统一为 list 方便前端渲染
-        current_state['grid'] = temp_result_data['color_array'].tolist()
-        current_state['pixel_size'] = temp_result_data['pixel_size']
-        current_state['color_code_count'] = temp_result_data['color_code_count']
-        
-        # 加载调色盘信息用于交互
-        df_colors = pd.read_csv(current_color_db)
-        current_state['palette'] = {
-            str(row['num']): [int(row['R']), int(row['G']), int(row['B'])] 
-            for _, row in df_colors.iterrows()
-        }
 
-    if current_state['grid'] is None:
-        return "请先处理图片再进入绘图页"
-
-    return render_template('draw_page.html', 
-                           grid=current_state['grid'], 
-                           palette=current_state['palette'],
-                           color_counts=current_state['color_code_count'])
-
-@app.route('/api/batch_update', methods=['POST'])
-def batch_update():
-    global current_state
-    data = request.json
-    old_id, new_id = str(data['old_id']), str(data['new_id'])
-    
-    if old_id == new_id or old_id not in current_state['color_code_count']:
-        return jsonify({"status": "success", "new_counts": current_state['color_code_count']})
-
-    # 1. 更新网格数据 (注意 grid 现在是 [ [ [ID], [ID] ] ] 结构)
-    grid_np = np.array(current_state['grid'], dtype=object)
-    mask = (grid_np[:, :, 0] == old_id)
-    grid_np[mask, 0] = new_id
-    current_state['grid'] = grid_np.tolist()
-
-    # 2. 合并统计信息
-    old_info = current_state['color_code_count'].pop(old_id)
-    if new_id in current_state['color_code_count']:
-        current_state['color_code_count'][new_id]['count'] += old_info['count']
-    else:
-        # 如果新 ID 不在当前统计中（手动替换为库中其他色），需要从调色盘补全
-        new_rgb = current_state['palette'].get(new_id, [0,0,0])
-        current_state['color_code_count'][new_id] = {
-            'count': old_info['count'],
-            'r_rgb': new_rgb[0], 'g_rgb': new_rgb[1], 'b_rgb': new_rgb[2],
-            'l_lab': old_info.get('l_lab', 0), 'a_lab': old_info.get('a_lab', 0), 'b_lab': old_info.get('b_lab', 0)
-        }
-
-    return jsonify({"status": "success", "new_counts": current_state['color_code_count']})
-
-
-    if current_state['grid'] is None:
-        return "数据为空", 400
-
-    try:
-        color_array = np.array(current_state['grid'], dtype=object)
-        # 调用 image_utils 的渲染函数，此时字段名已对齐
-        img = visualize_color_array(
-            color_array, 
-            current_state['color_code_count'], 
-            current_state['pixel_size']
-        )
-        
-        temp_path = os.path.join(app.config['OUTPUT_FOLDER'], "modified_draw.png")
-        img.save(temp_path)
-        return send_file(temp_path, as_attachment=True, download_name="final_design.png")
-    except Exception as e:
-        return f"生成失败: {e}", 500
-
-@app.route('/api/manage_db', methods=['POST'])
-def manage_db():
-    global current_color_db, temp_result_data
-    data = request.json
-    action = data.get('action')
-    filename = data.get('filename')
-
-    # 确保文件名以 .db 结尾
-    if not filename.endswith('.db'):
-        filename += '.db'
-    
-    file_path = os.path.join(COLOR_DB_DIR, filename)
-
-    try:
-        if action == 'create':
-            if os.path.exists(file_path):
-                return jsonify({"status": "error", "msg": "数据库已存在"}), 400
-            
-            # 创建新数据库并初始化表结构
-            conn = sqlite3.connect(file_path)
-            cursor = conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS colors (
-                    num TEXT PRIMARY KEY,
-                    R INTEGER,
-                    G INTEGER,
-                    B INTEGER,
-                    lab_l REAL,
-                    lab_a REAL,
-                    lab_b REAL
-                )
-            ''')
-            conn.commit()
-            conn.close()
-            return jsonify({"status": "success", "msg": f"数据库 {filename} 创建成功"})
-
-        elif action == 'select':
-            if not os.path.exists(file_path):
-                return jsonify({"status": "error", "msg": "数据库不存在"}), 404
-            
-            current_color_db = file_path
-            # 切换库后必须清除内存中的处理缓存，防止颜色编号对不上
-            temp_result_data = {"color_array": None, "pixel_size": 20, "color_code_count": {}}
-            # 同时调用 image_utils 的初始化函数刷新内存缓存
-            from image_utils import init_color_cache
-            init_color_cache(current_color_db)
-            
-            return jsonify({"status": "success", "msg": f"已切换至数据库: {filename}"})
-
-        elif action == 'delete':
-            if filename == 'colors.db': # 保护默认库
-                return jsonify({"status": "error", "msg": "不能删除默认数据库"}), 400
-            
-            if os.path.exists(file_path):
-                os.remove(file_path)
-                # 如果删除的是当前选中的库，切回默认库
-                if current_color_db == file_path:
-                    current_color_db = os.path.join(COLOR_DB_DIR, 'colors.db')
-                return jsonify({"status": "success", "msg": f"数据库 {filename} 已删除"})
-            else:
-                return jsonify({"status": "error", "msg": "找不到该文件"}), 404
-
-    except Exception as e:
-        return jsonify({"status": "error", "msg": f"操作失败: {str(e)}"}), 500
-
-    return jsonify({"status": "error", "msg": "未知操作"}), 400
-
+#————————————————————————————————————————#
+#            颜色数据库管理页面
+#————————————————————————————————————————#
 @app.route('/colors')
 def view_colors():
     return render_template('colors.html')
@@ -316,6 +189,149 @@ def save_modified():
         })
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
+
+
+#————————————————————————————————————————#
+#          交互修改图纸
+#————————————————————————————————————————#
+CURRENT_DRAWING_ID = 'last_converted'
+#进入draw_page页面
+@app.route('/draw_page')
+def draw_page():
+    global temp_result_data
+    
+    # 如果是从转换页跳过来的，先自动保存初始数据到数据库
+    if temp_result_data.get('color_array') is not None:
+        save_drawing_to_sqlite(
+            CURRENT_DRAWING_ID, 
+            temp_result_data['color_array'], 
+            temp_result_data['color_code_count']
+        )
+        # 清空临时区防止重复触发保存
+        temp_result_data['color_array'] = None
+
+    # 统一从数据库加载“单点真相”
+    grid_array, color_code_count = load_drawing_from_sqlite(CURRENT_DRAWING_ID)
+    
+    if grid_array is None:
+        return "图纸数据不存在，请先处理图片"
+
+    # 获取当前选中的调色盘数据库中的所有颜色，用于交互选择
+    # 注意：此处 current_color_db 应为您之前选中的 colors.db 路径
+    from image_utils import _COLOR_CACHE
+    palette = {}
+    if _COLOR_CACHE:
+        for row in _COLOR_CACHE['full_rows']:
+            palette[str(row[0])] = [int(row[1]), int(row[2]), int(row[3])]
+
+    return render_template('draw_page.html', 
+                           grid=grid_array.tolist(), 
+                           palette=palette,
+                           color_counts=color_code_count)
+
+# 新建空白图纸
+@app.route('/api/create_blank', methods=['POST'])
+def create_blank():
+    data = request.json
+    drawing_id = data.get('drawing_id')
+    width = int(data.get('width', 40))
+    height = int(data.get('height', 40))
+    
+    # 逻辑：创建一个全白（或调色盘第一个颜色）的矩阵
+    # 这里我们创建一个由 ID '1' 填充的矩阵，并构建初始元数据
+    default_id = "1"
+    new_grid = np.full((height, width, 1), default_id, dtype=object)
+    
+    # 初始化统计信息：总像素数全归于默认色
+    initial_counts = {
+        default_id: {
+            "count": width * height,
+            "r_rgb": 255, "g_rgb": 255, "b_rgb": 255,
+            "l_lab": 100, "a_lab": 0, "b_lab": 0
+        }
+    }
+    
+    try:
+        # 直接调用工具函数写入新数据库文件
+        save_drawing_to_sqlite(drawing_id, new_grid, initial_counts)
+        return jsonify({"status": "success", "drawing_id": drawing_id})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)}), 500
+
+# 裁剪图纸
+@app.route('/api/crop_drawing', methods=['POST'])
+def crop_drawing():
+    data = request.json  # 接收前端传来的坐标：x1, y1, x2, y2
+    drawing_id = CURRENT_DRAWING_ID # 或从 session 获取
+    
+    try:
+        # 先从数据库读取当前完整数据
+        grid_array, color_code_count = load_drawing_from_sqlite(drawing_id)
+        
+        # 执行 NumPy 裁剪操作
+        cropped_grid = grid_array[data['y1']:data['y2']+1, data['x1']:data['x2']+1]
+        
+        # 重新计算裁剪区域内的颜色统计
+        new_counts = {}
+        for code in cropped_grid.flatten():
+            code = str(code)
+            if code in new_counts:
+                new_counts[code]['count'] += 1
+            else:
+                # 从原统计中继承颜色元数据
+                info = color_code_count.get(code, {
+                    "r_rgb": 0, "g_rgb": 0, "b_rgb": 0,
+                    "l_lab": 0, "a_lab": 0, "b_lab": 0
+                }).copy()
+                info['count'] = 1
+                new_counts[code] = info
+        
+        # 将裁剪后的数据覆盖写入原数据库文件
+        save_drawing_to_sqlite(drawing_id, cropped_grid, new_counts)
+        
+        return jsonify({"status": "success", "new_counts": new_counts})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)}), 500
+
+# 加载已有图纸接口
+@app.route('/api/load_drawing', methods=['POST'])
+def load_drawing_api():
+    global CURRENT_DRAWING_ID
+    drawing_id = request.json.get('drawing_id')
+    
+    if os.path.exists(get_db_path(drawing_id)):
+        CURRENT_DRAWING_ID = drawing_id # 切换当前操作的图纸上下文
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error", "msg": "图纸文件不存在"}), 404
+
+#单格更新
+@app.route('/api/update_pixel', methods=['POST'])
+def update_pixel():
+    data = request.json
+    r, c = int(data['r']), int(data['c'])
+    new_id = str(data['new_id'])
+    
+    new_counts = update_pixel_in_db(CURRENT_DRAWING_ID, r, c, new_id)
+    
+    if new_counts is not None:
+        return jsonify({"status": "success", "new_counts": new_counts})
+    else:
+        return jsonify({"status": "error", "msg": "更新失败"}), 500
+
+#同色替换
+@app.route('/api/batch_update', methods=['POST'])
+def batch_update():
+    data = request.json
+    old_id = str(data['old_id'])
+    new_id = str(data['new_id'])
+    
+    new_counts = batch_update_in_db(CURRENT_DRAWING_ID, old_id, new_id)
+    
+    if new_counts is not None:
+        return jsonify({"status": "success", "new_counts": new_counts})
+    else:
+        # 如果返回 None，可能是 ID 相同或更新过程中出现异常
+        return jsonify({"status": "success", "msg": "无需更新或更新未执行"})
 
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5000)

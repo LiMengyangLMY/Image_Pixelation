@@ -1,3 +1,7 @@
+"""
+负责颜色数据库的读写、图片图纸转化、生成图纸、保存图纸源数据等操作
+"""
+
 from PIL import Image, ImageDraw, ImageFont
 import os
 import pandas as pd
