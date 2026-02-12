@@ -25,7 +25,7 @@ from image_utils import (
 # db_manager 导入
 from db_manager import update_pixel_in_db, batch_update_in_db, get_db_path
 
-
+from file_manager import limit_files
 #————————————————————————————————#
 #             全局变量            #
 #————————————————————————————————#
@@ -126,12 +126,15 @@ def image_conversion():
             temp_result_data['color_code_count'] = color_code_count
 
             processed_img.save(output_path)
+            limit_files(app.config['UPLOAD_FOLDER'])
+            limit_files(app.config['OUTPUT_FOLDER'])
             return render_template('image_conversion.html', success=True,
                                  original_image=url_for('static', filename=f'uploads/{input_filename}'),
                                  processed_image=url_for('static', filename=f'outputs/{output_filename}'))
         except Exception as e:
             return render_template('image_conversion.html', error=f"处理失败: {e}")
     
+
     return render_template('image_conversion.html')
 
 
@@ -290,6 +293,7 @@ def draw_page():
                             palette=palette,         
                             color_counts=color_code_count,
                             drawings=drawings)
+
 # 新建空白图纸
 @app.route('/api/create_blank', methods=['POST'])
 def create_blank():
