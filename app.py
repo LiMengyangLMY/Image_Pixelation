@@ -23,7 +23,7 @@ from image_utils import (
     load_drawing_from_sqlite
 )
 # db_manager 导入
-from db_manager import update_pixel_in_db, batch_update_in_db, get_db_path
+from db_manager import create_blank_drawing_logic,update_pixel_in_db, batch_update_in_db, get_db_path
 
 from file_manager import limit_files
 #————————————————————————————————#
@@ -258,68 +258,76 @@ CURRENT_DRAWING_ID = 'last_converted'
 #进入draw_page页面
 @app.route('/draw_page')
 def draw_page():
-    global temp_result_data
+    global temp_result_data, CURRENT_DRAWING_ID
     
+    # 1. 尝试保存处理后的临时数据
     if temp_result_data.get('color_array') is not None:
         save_drawing_to_sqlite(CURRENT_DRAWING_ID, temp_result_data['color_array'], temp_result_data['color_code_count'])
         temp_result_data['color_array'] = None
 
-    grid_array, color_code_count = load_drawing_from_sqlite(CURRENT_DRAWING_ID)
-    if grid_array is None:
-        return "图纸数据不存在，请先处理图片"
+    # 2. 扫描已有图纸列表
+    drawings_dir = './data/DrawingData'
+    drawings = [f[:-3] for f in os.listdir(drawings_dir) if f.endswith('.db')] if os.path.exists(drawings_dir) else []
 
-    from image_utils import _COLOR_CACHE, init_color_cache # 引入 init_color_cache
+    # 3. 尝试加载当前图纸上下文
+    grid_array, color_code_count = load_drawing_from_sqlite(CURRENT_DRAWING_ID)
+    
+    # 4. 自动处理逻辑：如果当前没有有效数据
+    if grid_array is None:
+        if drawings:
+            # 策略 A: 加载库中现有的第一个图纸
+            CURRENT_DRAWING_ID = drawings[0]
+            grid_array, color_code_count = load_drawing_from_sqlite(CURRENT_DRAWING_ID)
+        else:
+            # 策略 B: 调用 db_manager 中的封装函数创建全新的空白图纸
+            # 注意：传入 current_color_db 确保逻辑函数能找到颜色库
+            new_id = "default_blank"
+            grid_array, color_code_count = create_blank_drawing_logic(
+                new_id, 40, 40, current_color_db
+            )
+            CURRENT_DRAWING_ID = new_id
+            drawings = [new_id]
+
+    # 5. 准备调色盘数据（逻辑保持不变）
+    from image_utils import _COLOR_CACHE, init_color_cache
     if _COLOR_CACHE is None:
         init_color_cache(current_color_db) 
-        from image_utils import _COLOR_CACHE 
+        
     palette = {}
     if _COLOR_CACHE:
         for row in _COLOR_CACHE['full_rows']:
             color_id = str(row[0])
             palette[color_id] = {
-                "r_rgb": int(row[1]),
-                "g_rgb": int(row[2]),
-                "b_rgb": int(row[3]),
-                "l_lab": float(row[4]),
-                "a_lab": float(row[5]),
-                "b_lab": float(row[6])
+                "r_rgb": int(row[1]), "g_rgb": int(row[2]), "b_rgb": int(row[3]),
+                "l_lab": float(row[4]), "a_lab": float(row[5]), "b_lab": float(row[6])
             }
-
-    drawings_dir = './data/DrawingData'
-    drawings = [f[:-3] for f in os.listdir(drawings_dir) if f.endswith('.db')] if os.path.exists(drawings_dir) else []
 
     return render_template('draw_page.html', 
                             grid=grid_array.tolist(), 
                             palette=palette,         
                             color_counts=color_code_count,
-                            drawings=drawings)
+                            drawings=drawings,
+                            current_id=CURRENT_DRAWING_ID)
 
 # 新建空白图纸
 @app.route('/api/create_blank', methods=['POST'])
 def create_blank():
+    global CURRENT_DRAWING_ID
     data = request.json
     drawing_id = data.get('drawing_id')
     width = int(data.get('width', 40))
     height = int(data.get('height', 40))
-    
-    # 逻辑：创建一个全白（或调色盘第一个颜色）的矩阵
-    # 这里我们创建一个由 ID '1' 填充的矩阵，并构建初始元数据
-    default_id = "1"
-    new_grid = np.full((height, width, 1), default_id, dtype=object)
-    
-    # 初始化统计信息：总像素数全归于默认色
-    initial_counts = {
-        default_id: {
-            "count": width * height,
-            "r_rgb": 255, "g_rgb": 255, "b_rgb": 255,
-            "l_lab": 100, "a_lab": 0, "b_lab": 0
-        }
-    }
-    
+
     try:
-        # 直接调用工具函数写入新数据库文件
-        save_drawing_to_sqlite(drawing_id, new_grid, initial_counts)
-        return jsonify({"status": "success", "drawing_id": drawing_id})
+        # 直接调用 db_manager 中的逻辑
+        create_blank_drawing_logic(drawing_id, width, height, current_color_db)
+        CURRENT_DRAWING_ID = drawing_id
+        
+        return jsonify({
+            "status": "success", 
+            "drawing_id": drawing_id,
+            "message": "已成功创建空白图纸"
+        })
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
 

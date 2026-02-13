@@ -2,6 +2,7 @@ import sqlite3
 import json
 import numpy as np
 import os
+from image_utils import save_drawing_to_sqlite
 
 DB_DIR = './data/DrawingData'
 
@@ -34,7 +35,39 @@ def get_color_info_from_master_db(color_id):
     # 如果找不到，返回默认黑色或错误标识
     return {"r_rgb": 0, "g_rgb": 0, "b_rgb": 0, "l_lab": 0, "a_lab": 0, "b_lab": 0}
 
+#新建空白图纸
+def create_blank_drawing_logic(drawing_id, width=40, height=40):
+    default_id = "H2"
+    h2_data = {
+        "count": width * height,
+        "r_rgb": 255, "g_rgb": 255, "b_rgb": 255,
+        "l_lab": 100, "a_lab": 0, "b_lab": 0
+    }
+    
+    # 1. 查询颜色库获取 H2 属性
+    try:
+        with sqlite3.connect(current_color_db) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT R, G, B, lab_l, lab_a, lab_b FROM colors WHERE num = ?", (default_id,))
+            row = cursor.fetchone()
+            if row:
+                h2_data.update({
+                    "r_rgb": int(row[0]), "g_rgb": int(row[1]), "b_rgb": int(row[2]),
+                    "l_lab": float(row[3]), "a_lab": float(row[4]), "b_lab": float(row[5])
+                })
+    except Exception as e:
+        print(f"查询颜色库失败，使用默认白色填充: {e}")
 
+    # 2. 生成数据矩阵
+    new_grid = np.full((height, width, 1), default_id, dtype=object)
+    initial_counts = {default_id: h2_data}
+    
+    # 3. 保存到数据库
+    save_drawing_to_sqlite(drawing_id, new_grid, initial_counts)
+    
+    return new_grid, initial_counts
+
+#单格更换
 def update_pixel_in_db(drawing_id, r, c, new_id, l_lab=0, a_lab=0, b_lab=0, r_rgb=0, g_rgb=0, b_rgb=0):
     new_id = str(new_id).strip()
     db_path = get_db_path(drawing_id)
@@ -103,7 +136,7 @@ def update_pixel_in_db(drawing_id, r, c, new_id, l_lab=0, a_lab=0, b_lab=0, r_rg
     finally:
         conn.close()
 
-# 
+#批量换颜色
 def batch_update_in_db(drawing_id, old_id, new_id):
     old_id, new_id = str(old_id), str(new_id)
     if old_id == new_id: return None
