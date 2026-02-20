@@ -23,8 +23,13 @@ from image_utils import (
     load_drawing_from_sqlite
 )
 # db_manager 导入
-from db_manager import create_blank_drawing_logic,update_pixel_in_db, batch_update_in_db, get_db_path
-
+from db_manager import (
+    create_blank_drawing_logic,
+    update_pixel_in_db, 
+    batch_update_in_db, 
+    get_db_path,
+    crop_drawing_logic
+)
 from file_manager import limit_files
 #————————————————————————————————#
 #             全局变量            #
@@ -334,39 +339,21 @@ def create_blank():
 # 裁剪图纸
 @app.route('/api/crop_drawing', methods=['POST'])
 def crop_drawing():
-    data = request.json  # 接收前端传来的坐标：x1, y1, x2, y2
-    drawing_id = CURRENT_DRAWING_ID # 或从 session 获取
-    
+    data = request.json
+    drawing_id = CURRENT_DRAWING_ID
     try:
-        # 先从数据库读取当前完整数据
-        grid_array, color_code_count = load_drawing_from_sqlite(drawing_id)
-        
-        # 执行 NumPy 裁剪操作
-        cropped_grid = grid_array[data['y1']:data['y2']+1, data['x1']:data['x2']+1]
-        
-        # 重新计算裁剪区域内的颜色统计
-        new_counts = {}
-        for code in cropped_grid.flatten():
-            code = str(code)
-            if code in new_counts:
-                new_counts[code]['count'] += 1
-            else:
-                # 从原统计中继承颜色元数据
-                info = color_code_count.get(code, {
-                    "r_rgb": 0, "g_rgb": 0, "b_rgb": 0,
-                    "l_lab": 0, "a_lab": 0, "b_lab": 0
-                }).copy()
-                info['count'] = 1
-                new_counts[code] = info
-        
-        # 将裁剪后的数据覆盖写入原数据库文件
-        save_drawing_to_sqlite(drawing_id, cropped_grid, new_counts)
-        
+        # 调用封装好的逻辑函数
+        new_counts = crop_drawing_logic(
+            drawing_id, 
+            data['x1'], data['y1'], 
+            data['x2'], data['y2']
+        )
         return jsonify({"status": "success", "new_counts": new_counts})
     except Exception as e:
+        print(f"裁剪失败: {e}")
         return jsonify({"status": "error", "msg": str(e)}), 500
 
-# 加载已有图纸接口
+#加载已有图纸接口
 @app.route('/api/load_drawing', methods=['POST'])
 def load_drawing_api():
     global CURRENT_DRAWING_ID
@@ -407,6 +394,7 @@ def update_pixel():
     except Exception as e:
         print(f"API Error: {e}")
         return jsonify({"status": "error", "msg": str(e)}), 500
+
 #同色替换
 @app.route('/api/batch_update', methods=['POST'])
 def batch_update():
@@ -421,6 +409,17 @@ def batch_update():
     else:
         # 如果返回 None，可能是 ID 相同或更新过程中出现异常
         return jsonify({"status": "success", "msg": "无需更新或更新未执行"})
+
+#撤销步骤
+@app.route('/api/undo', methods=['POST'])
+def undo_action():
+    from db_manager import undo_logic
+    drawing_id = CURRENT_DRAWING_ID
+    
+    if undo_logic(drawing_id,10):
+        return jsonify({"status": "success", "msg": "撤销成功"})
+    else:
+        return jsonify({"status": "error", "msg": "QAQ没有可撤销的步骤"}), 400
 
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5000)

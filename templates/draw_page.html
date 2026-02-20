@@ -46,6 +46,7 @@
         <span class="text-light me-3 small">缩放: <span id="zoom-val">100</span>%</span>
         <button class="btn btn-outline-light btn-sm me-2" onclick="adjustZoom(1.2)">放大</button>
         <button class="btn btn-outline-light btn-sm me-2" onclick="adjustZoom(0.8)">缩小</button>
+        <button class="btn btn-outline-warning btn-sm me-2" onclick="triggerUndo()">↩️ 撤回 (Ctrl+Z)</button>
         <button class="btn btn-success btn-sm" onclick="downloadPreview()">下载预览图</button>
     </div>
 </nav>
@@ -233,6 +234,18 @@
         }
     }
 
+    //撤销步骤
+    async function triggerUndo() {
+    const resp = await fetch('/api/undo', { method: 'POST' });
+    if (resp.ok) {
+        // 撤销后直接刷新页面，重新加载数据库数据
+        location.reload(); 
+    } else {
+        const data = await resp.json();
+        alert(data.msg);
+    }
+    }
+
     // 渲染核心
     function render() {
         if (!grid || grid.length === 0) return;
@@ -375,6 +388,14 @@
         canvas.classList.toggle('crop-active');
         render();
     }
+
+    //绑定ctrl+z
+    window.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+            e.preventDefault();
+            triggerUndo();
+        }
+    });
 
     // 鼠标事件
     canvas.onmousedown = (e) => {

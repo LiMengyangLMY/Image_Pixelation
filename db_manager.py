@@ -2,10 +2,12 @@ import sqlite3
 import json
 import numpy as np
 import os
-from image_utils import save_drawing_to_sqlite
+import shutil
+from image_utils import save_drawing_to_sqlite,load_drawing_from_sqlite
 
 DB_DIR = './data/DrawingData'
-
+#快照数：可撤回的步骤数
+MAX_UNDO_STEPS = 10
 #获取地址
 def get_db_path(drawing_id):
     return os.path.join(DB_DIR, f"{drawing_id}.db")
@@ -13,6 +15,43 @@ def get_db_path(drawing_id):
 
 # 增加颜色库的路径定义
 COLOR_DB_PATH = './data/Color/colors.db'
+
+#滚动备份0-max_snapshots-1（共max_snapshots个备份）
+def save_snapshot(drawing_id,max_snapshots=MAX_UNDO_STEPS):
+    base_path = get_db_path(drawing_id)
+    if not os.path.exists(base_path):
+        return
+
+    # 滚动位移旧快照
+    for i in range(max_snapshots-1, 0, -1):
+        old_snap = f"{base_path}.snap_{i-1}"
+        new_snap = f"{base_path}.snap_{i}"
+        if os.path.exists(old_snap):
+            shutil.copy2(old_snap, new_snap)
+
+    # 创建当前状态的 snapshot_0
+    shutil.copy2(base_path, f"{base_path}.snap_0")
+
+#将 snapshot_0 恢复为当前数据库，并位移后续快照
+def undo_logic(drawing_id,max_snapshots=MAX_UNDO_STEPS):
+    base_path = get_db_path(drawing_id)
+    snap_0 = f"{base_path}.snap_0"
+    
+    if not os.path.exists(snap_0):
+        return False
+
+    # 1. 恢复当前数据库
+    shutil.copy2(snap_0, base_path)
+    
+    # 2. 移除已使用的快照，并将后面的向前移动
+    os.remove(snap_0)
+    for i in range(1, max_snapshots):
+        this_snap = f"{base_path}.snap_{i}"
+        prev_snap = f"{base_path}.snap_{i-1}"
+        if os.path.exists(this_snap):
+            os.rename(this_snap, prev_snap)
+            
+    return True
 
 def get_color_info_from_master_db(color_id):
     """辅助函数：从主颜色库获取颜色的 RGB/Lab 信息"""
@@ -67,6 +106,43 @@ def create_blank_drawing_logic(drawing_id, width=40, height=40):
     
     return new_grid, initial_counts
 
+#剪裁图纸
+def crop_drawing_logic(drawing_id, x1, y1, x2, y2):
+    """封装裁剪的核心逻辑"""
+    # 1. 从数据库读取当前完整数据
+    grid_array, color_code_count = load_drawing_from_sqlite(drawing_id)
+    if grid_array is None:
+        raise Exception("无法加载图纸数据")
+
+    # 2. 执行 NumPy 裁剪操作
+    cropped_grid = grid_array[y1:y2+1, x1:x2+1]
+    
+    # 3. 检查是否有实际变化 (可选：防止空操作产生快照)
+    if cropped_grid.shape == grid_array.shape:
+        return color_code_count
+
+    # 4. 重新计算裁剪区域内的颜色统计
+    new_counts = {}
+    for code in cropped_grid.flatten():
+        code = str(code)
+        if code in new_counts:
+            new_counts[code]['count'] += 1
+        else:
+            info = color_code_count.get(code, {
+                "r_rgb": 0, "g_rgb": 0, "b_rgb": 0,
+                "l_lab": 0, "a_lab": 0, "b_lab": 0
+            }).copy()
+            info['count'] = 1
+            new_counts[code] = info
+
+    # 5. 修改前执行快照保存
+    save_snapshot(drawing_id)
+
+    # 6. 将裁剪后的数据覆盖写入原数据库文件
+    save_drawing_to_sqlite(drawing_id, cropped_grid, new_counts)
+    
+    return new_counts
+
 #单格更换
 def update_pixel_in_db(drawing_id, r, c, new_id, l_lab=0, a_lab=0, b_lab=0, r_rgb=0, g_rgb=0, b_rgb=0):
     new_id = str(new_id).strip()
@@ -90,6 +166,7 @@ def update_pixel_in_db(drawing_id, r, c, new_id, l_lab=0, a_lab=0, b_lab=0, r_rg
             conn.commit()
             return meta_data
 
+        save_snapshot(drawing_id)
         # 更新网格
         cursor.execute('UPDATE grid SET color_id = ? WHERE r = ? AND c = ?', (new_id, int(r), int(c)))
 
@@ -141,6 +218,7 @@ def batch_update_in_db(drawing_id, old_id, new_id):
     old_id, new_id = str(old_id), str(new_id)
     if old_id == new_id: return None
 
+    save_snapshot(drawing_id)
     db_path = get_db_path(drawing_id)
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
