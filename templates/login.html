@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>拼豆图纸 - 用户中心</title>
+    <style>
+        :root { 
+            --primary: #4a90e2; 
+            --primary-hover: #357abd;
+            --vip: #f5a623; 
+            --vip-hover: #e69512;
+            --bg: #f4f7f6;
+            --text: #333;
+            --border: #ddd;
+        }
+
+        body { 
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; 
+            background: var(--bg); 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            min-height: 100vh; 
+            margin: 0; 
+        }
+
+        .auth-card { 
+            background: white; 
+            width: 400px; 
+            border-radius: 12px; 
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12); 
+            overflow: hidden; 
+        }
+
+        .tabs { 
+            display: flex; 
+            background: #f9f9f9; 
+            border-bottom: 1px solid #eee; 
+        }
+
+        .tab { 
+            flex: 1; 
+            padding: 15px; 
+            text-align: center; 
+            cursor: pointer; 
+            color: #666; 
+            font-size: 14px; 
+            transition: all 0.3s ease; 
+        }
+
+        .tab.active { 
+            background: white; 
+            color: var(--primary); 
+            font-weight: bold; 
+            border-bottom: 3px solid var(--primary); 
+        }
+
+        .tab.vip-tab { color: var(--vip); }
+        .tab.vip-tab.active { border-bottom-color: var(--vip); }
+        
+        .form-container { padding: 30px; }
+        .form-section { display: none; }
+        .form-section.active { display: block; }
+        
+        .input-group { margin-bottom: 15px; }
+        .input-group label { display: block; font-size: 12px; color: #666; margin-bottom: 5px; }
+        .input-group input { 
+            width: 100%; 
+            padding: 12px; 
+            border: 1px solid var(--border); 
+            border-radius: 8px; 
+            box-sizing: border-box; 
+            outline: none; 
+            transition: 0.2s; 
+        }
+        .input-group input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(74,144,226,0.1); }
+        
+        .verify-box { display: flex; gap: 10px; }
+        .btn-verify { 
+            white-space: nowrap; 
+            width: 130px; 
+            background: #eee; 
+            color: #555; 
+            font-size: 12px; 
+            border: 1px solid #ccc;
+            cursor: pointer;
+            border-radius: 8px;
+        }
+        .btn-verify:disabled { cursor: not-allowed; opacity: 0.6; }
+
+        button.main-btn { 
+            width: 100%; 
+            padding: 13px; 
+            border: none; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            font-size: 16px; 
+            font-weight: bold; 
+            transition: 0.3s; 
+            margin-top: 10px; 
+        }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover { background: var(--primary-hover); }
+        .btn-vip { background: var(--vip); color: white; }
+        .btn-vip:hover { background: var(--vip-hover); }
+        
+        .footer-links { 
+            margin-top: 20px; 
+            text-align: center; 
+            font-size: 13px; 
+            color: var(--primary); 
+            cursor: pointer; 
+        }
+        .hint { font-size: 12px; color: #999; margin-bottom: 15px; line-height: 1.5; }
+        .error-msg { color: #e74c3c; font-size: 12px; margin-top: 5px; display: none; }
+    </style>
+</head>
+<body>
+
+<div class="auth-card">
+    <div class="tabs">
+        <div class="tab active" id="tab-login" onclick="showSection('login')">登录</div>
+        <div class="tab" id="tab-register" onclick="showSection('register')">注册</div>
+        <div class="tab vip-tab" id="tab-vip" onclick="showSection('vip')">VIP激活</div>
+    </div>
+
+    <div class="form-container">
+        <div id="login" class="form-section active">
+            <div class="input-group">
+                <input type="text" placeholder="用户名或邮箱" id="l_user">
+            </div>
+            <div class="input-group">
+                <input type="password" placeholder="密码" id="l_pwd">
+            </div>
+            <button class="main-btn btn-primary" onclick="handleLogin()">立即登录</button>
+            <div class="footer-links" onclick="showSection('forgot')">忘记密码？点此找回</div>
+        </div>
+
+        <div id="register" class="form-section">
+            <div class="input-group">
+                <input type="text" placeholder="设置用户名" id="r_user">
+            </div>
+            <div class="input-group">
+                <input type="email" placeholder="输入邮箱地址" id="r_email">
+            </div>
+            <div class="input-group verify-box">
+                <input type="text" placeholder="6位验证码" id="r_vcode">
+                <button class="btn-verify" id="btn-r-code" onclick="sendEmailCode('register')">获取验证码</button>
+            </div>
+            <div class="input-group">
+                <input type="password" placeholder="设置登录密码 (至少6位)" id="r_pwd">
+            </div>
+            <div class="input-group">
+                <input type="password" placeholder="再次输入密码以确认" id="r_pwd_confirm">
+            </div>
+            <button class="main-btn btn-primary" onclick="handleRegister()">注 册</button>
+        </div>
+
+        <div id="vip" class="form-section">
+            <p class="hint">激活码为您在第三方平台（如闲鱼/小红书/淘宝）购买获得的16位字符串。</p>
+            <div class="input-group">
+                <input type="text" placeholder="请输入需要激活的用户名" id="v_user">
+            </div>
+            <div class="input-group">
+                <input type="text" placeholder="请输入16位激活卡密" id="v_code">
+            </div>
+            <button class="main-btn btn-vip" onclick="handleActivateVIP()">立即升级为 VIP</button>
+        </div>
+
+        <div id="forgot" class="form-section">
+            <p class="hint">验证码将发送至您的注册邮箱</p>
+            <div class="input-group">
+                <input type="email" placeholder="注册邮箱地址" id="f_email">
+            </div>
+            <div class="input-group verify-box">
+                <input type="text" placeholder="邮箱验证码" id="f_vcode">
+                <button class="btn-verify" id="btn-f-code" onclick="sendEmailCode('forgot')">获取验证码</button>
+            </div>
+            <div class="input-group">
+                <input type="password" placeholder="设置新密码" id="f_new_pwd">
+            </div>
+            <div class="input-group">
+                <input type="password" placeholder="再次输入新密码确认" id="f_new_pwd_confirm">
+            </div>
+            <button class="main-btn btn-primary" onclick="handleResetPassword()">重置密码并登录</button>
+            <div class="footer-links" onclick="showSection('login')">返回登录界面</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // 页面切换逻辑
+    function showSection(sectionId) {
+        document.querySelectorAll('.form-section').forEach(s => s.classList.remove('active'));
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        
+        document.getElementById(sectionId).classList.add('active');
+        const tabMap = { 'login': 'tab-login', 'register': 'tab-register', 'vip': 'tab-vip' };
+        if (tabMap[sectionId]) document.getElementById(tabMap[sectionId]).classList.add('active');
+    }
+
+    // 模拟发送验证码逻辑（含倒计时）
+    function sendEmailCode(type) {
+        const btnId = type === 'register' ? 'btn-r-code' : 'btn-f-code';
+        const btn = document.getElementById(btnId);
+        let timeLeft = 60;
+        
+        btn.disabled = true;
+        const timer = setInterval(() => {
+            if (timeLeft <= 0) {
+                clearInterval(timer);
+                btn.innerText = "获取验证码";
+                btn.disabled = false;
+            } else {
+                btn.innerText = `${timeLeft}s 后重发`;
+                timeLeft--;
+            }
+        }, 1000);
+        
+        console.log(`向 ${type} 流程发送验证码请求`);
+        // 此处明天对接: fetch('/api/send_code', { method: 'POST', body: ... })
+    }
+
+    // 注册处理逻辑 (含二次密码确认)
+    async function handleRegister() {
+        const pwd = document.getElementById('r_pwd').value;
+        const pwdConfirm = document.getElementById('r_pwd_confirm').value;
+
+        if (pwd !== pwdConfirm) {
+            alert("错误：两次输入的密码不一致！");
+            return;
+        }
+
+        if (pwd.length < 6) {
+            alert("密码太短，请至少设置6位字符");
+            return;
+        }
+
+        alert("校验通过，正在向服务器提交注册数据...");
+        // 此处明天对接: fetch('/api/register', ...)
+    }
+
+    // 找回密码处理逻辑 (含二次密码确认)
+    async function handleResetPassword() {
+        const newPwd = document.getElementById('f_new_pwd').value;
+        const newPwdConfirm = document.getElementById('f_new_pwd_confirm').value;
+
+        if (newPwd !== newPwdConfirm) {
+            alert("错误：两次输入的新密码不一致！");
+            return;
+        }
+
+        alert("验证码校验中，准备重置密码...");
+    }
+
+    // 登录与激活暂不涉及确认密码，直接留空等待 Day 2 对接
+    function handleLogin() { alert("正在登录..."); }
+    function handleActivateVIP() { alert("正在核验卡密有效性..."); }
+</script>
+
+</body>
+</html>

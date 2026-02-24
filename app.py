@@ -12,6 +12,11 @@ import colorsys
 from werkzeug.utils import secure_filename
 from skimage import color as sk_color
 from PIL import Image
+from flask import Flask, render_template, request, url_for, send_file, jsonify, redirect, flash
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
+import datetime
+from datetime import datetime, timedelta
 
 # image_utils 导入
 from image_utils import (
@@ -63,6 +68,180 @@ os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
+
+
+#————————————————————————————————#
+#          用户鉴权配置           #
+#————————————————————————————————#
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login_page' # 未登录时跳转的路由
+
+# 用户类模型
+class User(UserMixin):
+    def __init__(self, id, username, email, user_level):
+        self.id = id
+        self.username = username
+        self.email = email
+        self.user_level = user_level
+
+@login_manager.user_loader
+def load_user(user_id):
+    conn = sqlite3.connect('./data/users.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, email, user_level FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return User(row[0], row[1], row[2], row[3])
+    return None
+
+#————————————————————————————————#
+#          身份验证路由           #
+#————————————————————————————————#
+
+@app.route('/login_page')
+def login_page():
+    return render_template('login.html')
+
+# (1) 登录接口
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    data = request.json
+    account = data.get('account') # 用户名或邮箱
+    password = data.get('password')
+
+    conn = sqlite3.connect('./data/users.db')
+    cursor = conn.cursor()
+    # 支持用户名或邮箱登录
+    cursor.execute("SELECT id, username, email, password_hash, user_level FROM users WHERE username = ? OR email = ?", (account, account))
+    user_row = cursor.fetchone()
+    conn.close()
+
+    if user_row and check_password_hash(user_row[3], password):
+        user_obj = User(user_row[0], user_row[1], user_row[2], user_row[4])
+        login_user(user_obj)
+        return jsonify({"status": "success", "msg": "登录成功", "username": user_obj.username})
+    
+    return jsonify({"status": "error", "msg": "用户名或密码错误"}), 401
+
+# (2) 注册接口 (含密码一致性在前端校验，后端存哈希)
+@app.route('/api/register', methods=['POST'])
+def api_register():
+    data = request.json
+    username = data.get('username')
+    email = data.get('email')
+    password = data.get('password')
+    # vcode = data.get('vcode') # 邮箱验证码校验逻辑将在 Day 3 详写
+
+    # 简单校验
+    if not username or not email or not password:
+        return jsonify({"status": "error", "msg": "资料填写不完整"}), 400
+
+    pwd_hash = generate_password_hash(password)
+    
+    try:
+        conn = sqlite3.connect('./data/users.db')
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO users (username, email, password_hash, user_level) VALUES (?, ?, ?, 'common')", 
+                       (username, email, pwd_hash))
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "success", "msg": "注册成功，请登录"})
+    except sqlite3.IntegrityError:
+        return jsonify({"status": "error", "msg": "用户名或邮箱已存在"}), 400
+
+# (3) VIP 激活接口 (卡密模式)
+@app.route('/api/activate_vip', methods=['POST'])
+def api_activate_vip():
+    data = request.json
+    username = data.get('username')
+    code = data.get('code')
+
+    conn = sqlite3.connect('./data/users.db')
+    cursor = conn.cursor()
+    
+    # 1. 获取卡密有效天数 (假设 valid_days 为 30)
+    cursor.execute("SELECT code, valid_days FROM vip_codes WHERE code = ? AND is_used = 0", (code,))
+    row = cursor.fetchone()
+    
+    if row:
+        valid_days = row[1]
+        # 计算过期时间：当前时间 + 有效天数
+        expire_date = (datetime.now() + timedelta(days=valid_days)).strftime('%Y-%m-%d %H:%M:%S')
+        
+        try:
+            # 2. 更新用户等级和过期时间
+            cursor.execute("""
+                UPDATE users 
+                SET user_level = 'vip', vip_expire_at = ? 
+                WHERE username = ?
+            """, (expire_date, username))
+            
+            # 3. 标记卡密已使用
+            cursor.execute("UPDATE vip_codes SET is_used = 1, used_by = ? WHERE code = ?", (username, code))
+            
+            conn.commit()
+            return jsonify({"status": "success", "msg": f"激活成功！有效期至 {expire_date}"})
+        except Exception as e:
+            conn.rollback()
+            return jsonify({"status": "error", "msg": str(e)}), 500
+        finally:
+            conn.close()
+    
+    return jsonify({"status": "error", "msg": "无效卡密"}), 400
+
+# (4) 找回密码/修改密码
+@app.route('/api/reset_password', methods=['POST'])
+def api_reset_password():
+    data = request.json
+    email = data.get('email')
+    new_password = data.get('password')
+    
+    # 实际开发中此处需校验 email_verify 表中的验证码
+    pwd_hash = generate_password_hash(new_password)
+    
+    conn = sqlite3.connect('./data/users.db')
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET password_hash = ? WHERE email = ?", (pwd_hash, email))
+    conn.commit()
+    count = cursor.rowcount
+    conn.close()
+    
+    if count > 0:
+        return jsonify({"status": "success", "msg": "密码已重置，请重新登录"})
+    return jsonify({"status": "error", "msg": "邮箱未注册"}), 404
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('login_page'))
+
+@login_manager.user_loader
+def load_user(user_id):
+    conn = sqlite3.connect('./data/users.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, email, user_level, vip_expire_at FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    
+    if row:
+        user_id_val, username, email, level, expire_at = row
+        
+        # --- 自动取消逻辑 ---
+        if level == 'vip' and expire_at:
+            expire_dt = datetime.strptime(expire_at, '%Y-%m-%d %H:%M:%S')
+            if datetime.now() > expire_dt:
+                # 已过期，立即在数据库中降级并更新当前对象
+                cursor.execute("UPDATE users SET user_level = 'common' WHERE id = ?", (user_id_val,))
+                conn.commit()
+                level = 'common' # 将当前会话中的等级设为普通
+        
+        conn.close()
+        return User(user_id_val, username, email, level)
+    
+    conn.close()
+    return None
 
 #————————————————————————————————————————#
 #                  首页

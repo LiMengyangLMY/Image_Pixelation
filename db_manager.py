@@ -4,18 +4,42 @@ import numpy as np
 import os
 import shutil
 from image_utils import save_drawing_to_sqlite,load_drawing_from_sqlite
-
+#路径设置
+USER_DB_PATH = './data/users.db'
 DB_DIR = './data/DrawingData'
-#快照数：可撤回的步骤数
+COLOR_DB_PATH = './data/Color/colors.db'
+#快照数，即可撤回的步骤数
 MAX_UNDO_STEPS = 10
 #获取地址
 def get_db_path(drawing_id):
     return os.path.join(DB_DIR, f"{drawing_id}.db")
 
 
-# 增加颜色库的路径定义
-COLOR_DB_PATH = './data/Color/colors.db'
+def get_color_info_from_master_db(color_id):
+    """辅助函数：从主颜色库获取颜色的 RGB/Lab 信息"""
+    try:
+        conn = sqlite3.connect(COLOR_DB_PATH)
+        cursor = conn.cursor()
+        # 假设 colors 表结构是: num, R, G, B, lab_l, lab_a, lab_b
+        cursor.execute("SELECT R, G, B, lab_l, lab_a, lab_b FROM colors WHERE num = ?", (str(color_id),))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            return {
+                "r_rgb": int(row[0]), "g_rgb": int(row[1]), "b_rgb": int(row[2]),
+                "l_lab": float(row[3]), "a_lab": float(row[4]), "b_lab": float(row[5])
+            }
+    except Exception as e:
+        print(f"无法从主库获取颜色 {color_id}: {e}")
+    
+    # 如果找不到，返回默认黑色或错误标识
+    return {"r_rgb": 0, "g_rgb": 0, "b_rgb": 0, "l_lab": 0, "a_lab": 0, "b_lab": 0}
 
+
+#————————————————————————————————————————#
+#          撤销功能（快照功能）            #
+#————————————————————————————————————————# 
 #滚动备份0-max_snapshots-1（共max_snapshots个备份）
 def save_snapshot(drawing_id,max_snapshots=MAX_UNDO_STEPS):
     base_path = get_db_path(drawing_id)
@@ -53,27 +77,9 @@ def undo_logic(drawing_id,max_snapshots=MAX_UNDO_STEPS):
             
     return True
 
-def get_color_info_from_master_db(color_id):
-    """辅助函数：从主颜色库获取颜色的 RGB/Lab 信息"""
-    try:
-        conn = sqlite3.connect(COLOR_DB_PATH)
-        cursor = conn.cursor()
-        # 假设 colors 表结构是: num, R, G, B, lab_l, lab_a, lab_b
-        cursor.execute("SELECT R, G, B, lab_l, lab_a, lab_b FROM colors WHERE num = ?", (str(color_id),))
-        row = cursor.fetchone()
-        conn.close()
-        
-        if row:
-            return {
-                "r_rgb": int(row[0]), "g_rgb": int(row[1]), "b_rgb": int(row[2]),
-                "l_lab": float(row[3]), "a_lab": float(row[4]), "b_lab": float(row[5])
-            }
-    except Exception as e:
-        print(f"无法从主库获取颜色 {color_id}: {e}")
-    
-    # 如果找不到，返回默认黑色或错误标识
-    return {"r_rgb": 0, "g_rgb": 0, "b_rgb": 0, "l_lab": 0, "a_lab": 0, "b_lab": 0}
-
+#————————————————————————————————————————#
+#                新建空白图纸             #
+#————————————————————————————————————————# 
 #新建空白图纸
 def create_blank_drawing_logic(drawing_id, width=40, height=40):
     default_id = "H2"
@@ -106,6 +112,9 @@ def create_blank_drawing_logic(drawing_id, width=40, height=40):
     
     return new_grid, initial_counts
 
+#————————————————————————————————————————#
+#          交互修改图纸源数据              #
+#————————————————————————————————————————# 
 #剪裁图纸
 def crop_drawing_logic(drawing_id, x1, y1, x2, y2):
     """封装裁剪的核心逻辑"""
@@ -215,6 +224,7 @@ def update_pixel_in_db(drawing_id, r, c, new_id, l_lab=0, a_lab=0, b_lab=0, r_rg
 
 #批量换颜色
 def batch_update_in_db(drawing_id, old_id, new_id):
+
     old_id, new_id = str(old_id), str(new_id)
     if old_id == new_id: return None
 
@@ -276,3 +286,59 @@ def batch_update_in_db(drawing_id, old_id, new_id):
         return None
     finally:
         conn.close()
+
+#————————————————————————————————————————#
+#                USER管理                #
+#————————————————————————————————————————#     
+# 新增用户
+def add_user(username, password_hash):
+    try:
+        conn = sqlite3.connect(USER_DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", 
+                       (username, password_hash))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        print("用户名已存在")
+        return False
+    finally:
+        conn.close()
+
+# 修改密码
+def update_password(username, new_password_hash):
+    try:
+        conn = sqlite3.connect(USER_DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET password_hash = ? WHERE username = ?", 
+                       (new_password_hash, username))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        print(f"修改密码失败: {e}")
+        return False
+    finally:
+        conn.close()
+
+# 获取用户信息：(id, username, password_hash, user_level)
+def get_user_info(username):
+    conn = sqlite3.connect(USER_DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, password_hash, user_level FROM users WHERE username = ?", (username,))
+    user = cursor.fetchone()
+    conn.close()
+    return user
+
+#设置用户等级：(common 或 vip)
+def set_user_level(username, level):
+    if level not in ['common', 'vip']:
+        return False
+    try:
+        conn = sqlite3.connect(USER_DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET user_level = ? WHERE username = ?", (level, username))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
