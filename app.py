@@ -1,83 +1,121 @@
 #=====================================================
 #       Flask Web应用 + 图片颜色编码处理
 #=====================================================
-from flask import Flask, render_template, request, url_for, send_file, jsonify
+from flask import Flask, render_template, request, url_for, send_file, jsonify, redirect, flash
 import os
 import uuid
 import json
 import sqlite3
-import pandas as pd
 import numpy as np
-import colorsys
 from werkzeug.utils import secure_filename
-from skimage import color as sk_color
 from PIL import Image
-from flask import Flask, render_template, request, url_for, send_file, jsonify, redirect, flash
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-import datetime
 from datetime import datetime, timedelta
+from flask_mail import Mail, Message
+import random
+import threading
+import socket
 
-# image_utils 导入
+# 解决部分环境下中文主机名导致发邮件报错的问题
+try:
+    socket.gethostname = lambda: "localhost"
+except:
+    pass
+
+# 导入自定义模块
 from image_utils import (
     save_drawing_to_sqlite, 
     reduce_image_colors_Pro, 
     process_image_with_color_code, 
     reduce_image_colors, 
     visualize_color_array,
-    load_drawing_from_sqlite
+    load_drawing_from_sqlite,
+    init_color_cache,
+    _COLOR_CACHE
 )
-# db_manager 导入
 from db_manager import (
     create_blank_drawing_logic,
     update_pixel_in_db, 
     batch_update_in_db, 
     get_db_path,
-    crop_drawing_logic
+    crop_drawing_logic,
+    save_verification_code,
+    verify_code_logic,
+    update_password_by_email
 )
 from file_manager import limit_files
-#————————————————————————————————#
-#             全局变量            #
-#————————————————————————————————#
-# 全局配置路径
-COLOR_DB_DIR = './data/Color/'
-if not os.path.exists(COLOR_DB_DIR):
-    os.makedirs(COLOR_DB_DIR)
-
-# 默认选中的数据库文件（初始设为一个默认库）
-current_color_db = os.path.join(COLOR_DB_DIR, 'colors.db')
-
-# 核心状态维护
-current_state = {
-    'grid': None,               # NumPy array (H, W, 1) 存储 ID
-    'palette': {},              # { 'ID': [R, G, B] }
-    'pixel_size': 20,
-    'color_code_count': {}      # { 'ID': { 'count': n, 'r_rgb': r, ... 'l_lab': l ... } }
-}
-
-temp_result_data = {"color_array": None, "pixel_size": 20, "color_code_count": {}}
 
 app = Flask(__name__)
+# 设置一个随机的密钥，用于加密 Session
+app.secret_key = 'wo-de-pin-dou-xiang-mu-secret-key' 
+
+# 路径配置
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
 app.config['OUTPUT_FOLDER'] = 'static/outputs'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif', 'bmp'}
 
+# 确保目录存在
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
+COLOR_DB_DIR = './data/Color/'
+if not os.path.exists(COLOR_DB_DIR):
+    os.makedirs(COLOR_DB_DIR)
 
+# 默认颜色数据库
+current_color_db = os.path.join(COLOR_DB_DIR, 'colors.db')
+
+# ——————————————————————————————————————#
+#          邮件配置 (SMTP)              #
+# ——————————————————————————————————————#
+app.config['MAIL_SERVER'] = 'smtp.qq.com'
+app.config['MAIL_PORT'] = 465
+app.config['MAIL_USE_SSL'] = True
+app.config['MAIL_USERNAME'] = '1364527938@qq.com'
+app.config['MAIL_PASSWORD'] = 'klmwjzlnsgsngeab'  # 授权码
+app.config['MAIL_DEFAULT_SENDER'] = app.config['MAIL_USERNAME']
+
+mail = Mail(app)
+
+# ————————————————————————————————#
+#             全局变量 (注意并发)  #
+# ————————————————————————————————#
+# 注意：在多用户环境下，使用全局变量存储状态是不安全的。
+# 建议后续改为将 drawing_id 存储在用户的 session 中。
+current_state = {
+    'grid': None,
+    'palette': {},
+    'pixel_size': 20,
+    'color_code_count': {}
+}
+temp_result_data = {"color_array": None, "pixel_size": 20, "color_code_count": {}}
+CURRENT_DRAWING_ID = 'last_converted'
+
+# ————————————————————————————————#
+#          工具函数                #
+# ————————————————————————————————#
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 
+def generate_verification_code():
+    return str(random.randint(100000, 999999))
 
-#————————————————————————————————#
-#          用户鉴权配置           #
-#————————————————————————————————#
+def send_async_email(app_obj, msg):
+    with app_obj.app_context():
+        try:
+            mail.send(msg)
+            print(f"邮件已发送至 {msg.recipients}")
+        except Exception as e:
+            print(f"邮件发送失败: {e}")
+
+# ————————————————————————————————#
+#          用户鉴权配置            #
+# ————————————————————————————————#
 login_manager = LoginManager()
 login_manager.init_app(app)
-login_manager.login_view = 'login_page' # 未登录时跳转的路由
+login_manager.login_view = 'login_page'
 
-# 用户类模型
 class User(UserMixin):
     def __init__(self, id, username, email, user_level):
         self.id = id
@@ -85,35 +123,56 @@ class User(UserMixin):
         self.email = email
         self.user_level = user_level
 
+# 统一的 user_loader (包含了 VIP 过期检查逻辑)
 @login_manager.user_loader
 def load_user(user_id):
     conn = sqlite3.connect('./data/users.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, email, user_level FROM users WHERE id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
+    # 注意：这里假设数据库中有 vip_expire_at 字段，如果没有请先执行 init_user_db.py 中的升级脚本
+    try:
+        cursor.execute("SELECT id, username, email, user_level, vip_expire_at FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+    except sqlite3.OperationalError:
+        # 容错：如果数据库表结构还没更新
+        cursor.execute("SELECT id, username, email, user_level FROM users WHERE id = ?", (user_id,))
+        row = list(cursor.fetchone()) + [None] if cursor.fetchone() else None
+
     if row:
-        return User(row[0], row[1], row[2], row[3])
+        user_id_val, username, email, level, expire_at = row
+        
+        # --- VIP 自动过期逻辑 ---
+        if level == 'vip' and expire_at:
+            try:
+                expire_dt = datetime.strptime(expire_at, '%Y-%m-%d %H:%M:%S')
+                if datetime.now() > expire_dt:
+                    # 已过期，降级
+                    cursor.execute("UPDATE users SET user_level = 'common' WHERE id = ?", (user_id_val,))
+                    conn.commit()
+                    level = 'common'
+            except ValueError:
+                pass # 时间格式错误忽略
+        
+        conn.close()
+        return User(user_id_val, username, email, level)
+    
+    conn.close()
     return None
 
-#————————————————————————————————#
-#          身份验证路由           #
-#————————————————————————————————#
-
+# ————————————————————————————————#
+#          身份验证路由            #
+# ————————————————————————————————#
 @app.route('/login_page')
 def login_page():
     return render_template('login.html')
 
-# (1) 登录接口
 @app.route('/api/login', methods=['POST'])
 def api_login():
     data = request.json
-    account = data.get('account') # 用户名或邮箱
+    account = data.get('account')
     password = data.get('password')
 
     conn = sqlite3.connect('./data/users.db')
     cursor = conn.cursor()
-    # 支持用户名或邮箱登录
     cursor.execute("SELECT id, username, email, password_hash, user_level FROM users WHERE username = ? OR email = ?", (account, account))
     user_row = cursor.fetchone()
     conn.close()
@@ -125,18 +184,19 @@ def api_login():
     
     return jsonify({"status": "error", "msg": "用户名或密码错误"}), 401
 
-# (2) 注册接口 (含密码一致性在前端校验，后端存哈希)
 @app.route('/api/register', methods=['POST'])
 def api_register():
     data = request.json
     username = data.get('username')
     email = data.get('email')
     password = data.get('password')
-    # vcode = data.get('vcode') # 邮箱验证码校验逻辑将在 Day 3 详写
+    vcode = data.get('vcode')
 
-    # 简单校验
-    if not username or not email or not password:
+    if not all([username, email, password, vcode]):
         return jsonify({"status": "error", "msg": "资料填写不完整"}), 400
+
+    if not verify_code_logic(email, vcode):
+        return jsonify({"status": "error", "msg": "验证码错误或已过期"}), 400
 
     pwd_hash = generate_password_hash(password)
     
@@ -151,7 +211,37 @@ def api_register():
     except sqlite3.IntegrityError:
         return jsonify({"status": "error", "msg": "用户名或邮箱已存在"}), 400
 
-# (3) VIP 激活接口 (卡密模式)
+@app.route('/api/send_email_code', methods=['POST'])
+def send_email_code():
+    data = request.json
+    email = data.get('email')
+
+    if not email:
+        return jsonify({"status": "error", "msg": "请输入邮箱地址"}), 400
+
+    # 生成验证码
+    code = generate_verification_code()
+    
+    # 存入数据库
+    try:
+        save_verification_code(email, code)
+    except Exception as e:
+        return jsonify({"status": "error", "msg": f"数据库错误: {str(e)}"}), 500
+
+    # 构造邮件
+    msg = Message(subject="【拼豆图纸】注册验证码", recipients=[email])
+    msg.body = f"您的注册验证码是：{code}，有效期为5分钟。如非本人操作请忽略。"
+    
+    try:
+        print(f"正在向 {email} 发送邮件...")
+        mail.send(msg)
+        print("✅ 发送成功！")
+        return jsonify({"status": "success", "msg": "验证码已发送，请查收！"})
+    except Exception as e:
+        print(f"❌ 发送失败: {e}")
+        # 这里会把具体错误返回给网页，让你直接看到
+        return jsonify({"status": "error", "msg": f"邮件发送失败: {str(e)}"}), 500
+
 @app.route('/api/activate_vip', methods=['POST'])
 def api_activate_vip():
     data = request.json
@@ -160,27 +250,15 @@ def api_activate_vip():
 
     conn = sqlite3.connect('./data/users.db')
     cursor = conn.cursor()
-    
-    # 1. 获取卡密有效天数 (假设 valid_days 为 30)
     cursor.execute("SELECT code, valid_days FROM vip_codes WHERE code = ? AND is_used = 0", (code,))
     row = cursor.fetchone()
     
     if row:
         valid_days = row[1]
-        # 计算过期时间：当前时间 + 有效天数
         expire_date = (datetime.now() + timedelta(days=valid_days)).strftime('%Y-%m-%d %H:%M:%S')
-        
         try:
-            # 2. 更新用户等级和过期时间
-            cursor.execute("""
-                UPDATE users 
-                SET user_level = 'vip', vip_expire_at = ? 
-                WHERE username = ?
-            """, (expire_date, username))
-            
-            # 3. 标记卡密已使用
+            cursor.execute("UPDATE users SET user_level = 'vip', vip_expire_at = ? WHERE username = ?", (expire_date, username))
             cursor.execute("UPDATE vip_codes SET is_used = 1, used_by = ? WHERE code = ?", (username, code))
-            
             conn.commit()
             return jsonify({"status": "success", "msg": f"激活成功！有效期至 {expire_date}"})
         except Exception as e:
@@ -188,29 +266,31 @@ def api_activate_vip():
             return jsonify({"status": "error", "msg": str(e)}), 500
         finally:
             conn.close()
-    
     return jsonify({"status": "error", "msg": "无效卡密"}), 400
 
-# (4) 找回密码/修改密码
 @app.route('/api/reset_password', methods=['POST'])
 def api_reset_password():
     data = request.json
     email = data.get('email')
+    vcode = data.get('vcode')       # 前端传来的验证码
     new_password = data.get('password')
     
-    # 实际开发中此处需校验 email_verify 表中的验证码
+    # 1. 基础校验
+    if not all([email, vcode, new_password]):
+        return jsonify({"status": "error", "msg": "请填写完整信息"}), 400
+
+    # 2. 校验验证码 (关键步骤)
+    if not verify_code_logic(email, vcode):
+        return jsonify({"status": "error", "msg": "验证码错误或已过期"}), 400
+
+    # 3. 生成新密码哈希
     pwd_hash = generate_password_hash(new_password)
     
-    conn = sqlite3.connect('./data/users.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET password_hash = ? WHERE email = ?", (pwd_hash, email))
-    conn.commit()
-    count = cursor.rowcount
-    conn.close()
-    
-    if count > 0:
-        return jsonify({"status": "success", "msg": "密码已重置，请重新登录"})
-    return jsonify({"status": "error", "msg": "邮箱未注册"}), 404
+    # 4. 更新数据库
+    if update_password_by_email(email, pwd_hash):
+        return jsonify({"status": "success", "msg": "密码已重置，请使用新密码登录"})
+    else:
+        return jsonify({"status": "error", "msg": "该邮箱未注册"}), 404
 
 @app.route('/logout')
 @login_required
@@ -218,43 +298,17 @@ def logout():
     logout_user()
     return redirect(url_for('login_page'))
 
-@login_manager.user_loader
-def load_user(user_id):
-    conn = sqlite3.connect('./data/users.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, username, email, user_level, vip_expire_at FROM users WHERE id = ?", (user_id,))
-    row = cursor.fetchone()
-    
-    if row:
-        user_id_val, username, email, level, expire_at = row
-        
-        # --- 自动取消逻辑 ---
-        if level == 'vip' and expire_at:
-            expire_dt = datetime.strptime(expire_at, '%Y-%m-%d %H:%M:%S')
-            if datetime.now() > expire_dt:
-                # 已过期，立即在数据库中降级并更新当前对象
-                cursor.execute("UPDATE users SET user_level = 'common' WHERE id = ?", (user_id_val,))
-                conn.commit()
-                level = 'common' # 将当前会话中的等级设为普通
-        
-        conn.close()
-        return User(user_id_val, username, email, level)
-    
-    conn.close()
-    return None
+# ————————————————————————————————#
+#             业务路由             #
+# ————————————————————————————————#
 
-#————————————————————————————————————————#
-#                  首页
-#————————————————————————————————————————#
 @app.route('/')
+@login_required
 def home():
     db_files = [f for f in os.listdir(COLOR_DB_DIR) if f.endswith('.db')]
     current_name = os.path.basename(current_color_db)
     return render_template('index.html', db_files=db_files, current=current_name)
 
-#————————————————————————————————————————#
-#              图片处理页面
-#————————————————————————————————————————#
 @app.route('/image_conversion', methods=['GET', 'POST'])
 def image_conversion():
     global temp_result_data
@@ -287,7 +341,6 @@ def image_conversion():
             is_reduce_Pro_on = request.form.get('reduce_colors_Pro') == 'on'
             target_count = int(request.form.get('color_count', 16))
 
-            # 执行转换逻辑
             if is_reduce_Pro_on:
                 _, processed_img, color_array, color_code_count = reduce_image_colors_Pro(
                     input_path, output_path, current_color_db,
@@ -304,7 +357,6 @@ def image_conversion():
                     scale_factor=calc_scale_factor, pixel_scale=pixel_size
                 )
 
-            # 存入临时区
             temp_result_data['color_array'] = color_array
             temp_result_data['pixel_size'] = pixel_size
             temp_result_data['color_code_count'] = color_code_count
@@ -318,40 +370,23 @@ def image_conversion():
         except Exception as e:
             return render_template('image_conversion.html', error=f"处理失败: {e}")
     
-
     return render_template('image_conversion.html')
 
-
-#————————————————————————————————————————#
-#            颜色数据库管理页面
-#————————————————————————————————————————#
 @app.route('/colors')
 def view_colors():
     return render_template('colors.html')
 
-
-#————————————————————————————————————————#
-#          保存图纸、图纸源数据
-#————————————————————————————————————————#
-# 下载可视化图片
 @app.route('/download_file/<filename>')
 def download_file(filename):
-    """
-    使用 visualize_color_array 生成的图片文件下载
-    对应前端：url_for('download_file', filename=...)
-    """
     file_path = os.path.join(app.config['OUTPUT_FOLDER'], filename)
     if not os.path.exists(file_path):
-        # 如果是即时生成的修改结果，可以先调用 visualize_color_array 再发送
-        # 这里假设文件已存在于输出目录
         return "文件不存在", 404
-        
     return send_file(file_path, as_attachment=True)
 
-# 保存图纸源数据到本地数据库
 @app.route('/api/save_modified', methods=['POST'])
 def save_modified():
-    # 尝试从 temp_result_data 获取数据（如果 current_state 为空）
+    global CURRENT_DRAWING_ID
+    # 尝试从 temp_result_data 获取数据
     grid_to_save = current_state.get('grid')
     counts_to_save = current_state.get('color_code_count')
 
@@ -364,48 +399,14 @@ def save_modified():
 
     try:
         drawing_id = request.json.get('drawing_id') or str(uuid.uuid4())[:8]
-        # 确保是 numpy 数组格式
+        # 确保是 numpy 数组
         color_array = np.array(grid_to_save, dtype=object)
         save_drawing_to_sqlite(drawing_id, color_array, counts_to_save)
         
-        # 关键：更新当前的上下文 ID，以便跳转后 draw_page 能找到它
-        global CURRENT_DRAWING_ID
         CURRENT_DRAWING_ID = drawing_id 
-        
         return jsonify({"status": "success", "msg": "图纸源数据已保存", "drawing_id": drawing_id})
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
-
-#下载图纸源数据对应的可视化图片
-
-    # 从数据库读取
-    grid_array, color_code_count = load_drawing_from_sqlite(CURRENT_DRAWING_ID)
-    
-    if grid_array is None:
-        return "无可下载的数据", 404
-
-    # --- 核心修复：强制转换为 NumPy 数组 ---
-    # 确保 grid_array 是 (H, W, 1) 或 (H, W) 的 NumPy 结构
-    grid_array = np.array(grid_array)
-
-    from image_utils import _COLOR_CACHE
-    # 确保缓存存在，否则提供备选逻辑
-    if _COLOR_CACHE and 'full_rows' in _COLOR_CACHE:
-        palette_map = {str(row[0]): [int(row[1]), int(row[2]), int(row[3])] for row in _COLOR_CACHE['full_rows']}
-    else:
-        # 备选：如果缓存失效，从当前图纸统计信息中构建一个临时调色盘
-        palette_map = {str(k): [v['r_rgb'], v['g_rgb'], v['b_rgb']] for k, v in color_code_count.items()}
-    
-    # 渲染图片
-    try:
-        img = visualize_color_array(grid_array, palette_map, pixel_scale=20) 
-        
-        output_path = os.path.join(app.config['OUTPUT_FOLDER'], f"export_{CURRENT_DRAWING_ID}.png")
-        img.save(output_path)
-        
-        return send_file(output_path, as_attachment=True)
-    except Exception as e:
-        return f"生成图片失败: {str(e)}", 500
 
 @app.route('/download_modified')
 def download_modified():
@@ -416,30 +417,24 @@ def download_modified():
         return "无可下载的数据", 404
 
     grid_array = np.array(grid_array)
+    # 处理维度问题，visualize 需要 (H,W,1)
     if grid_array.ndim == 2:
         grid_array = grid_array[:, :, np.newaxis]
 
-    from image_utils import _COLOR_CACHE, init_color_cache
-    
     if _COLOR_CACHE is None:
         init_color_cache(current_color_db) 
 
     try:
         img = visualize_color_array(grid_array, color_code_count, pixel_scale=20) 
-        
         output_path = os.path.join(app.config['OUTPUT_FOLDER'], f"export_{CURRENT_DRAWING_ID}.png")
         img.save(output_path)
-        
         return send_file(output_path, as_attachment=True)
     except Exception as e:
-        print(f"渲染下载图纸时出错: {e}")
         return f"生成图片失败: {str(e)}", 500
 
-#————————————————————————————————————————#
-#          交互修改图纸
-#————————————————————————————————————————#
-CURRENT_DRAWING_ID = 'last_converted'
-#进入draw_page页面
+# ————————————————————————————————#
+#             绘图页交互           #
+# ————————————————————————————————#
 @app.route('/draw_page')
 def draw_page():
     global temp_result_data, CURRENT_DRAWING_ID
@@ -449,31 +444,26 @@ def draw_page():
         save_drawing_to_sqlite(CURRENT_DRAWING_ID, temp_result_data['color_array'], temp_result_data['color_code_count'])
         temp_result_data['color_array'] = None
 
-    # 2. 扫描已有图纸列表
+    # 2. 扫描已有图纸
     drawings_dir = './data/DrawingData'
     drawings = [f[:-3] for f in os.listdir(drawings_dir) if f.endswith('.db')] if os.path.exists(drawings_dir) else []
 
-    # 3. 尝试加载当前图纸上下文
+    # 3. 加载当前
     grid_array, color_code_count = load_drawing_from_sqlite(CURRENT_DRAWING_ID)
     
-    # 4. 自动处理逻辑：如果当前没有有效数据
+    # 4. 自动处理空数据
     if grid_array is None:
         if drawings:
-            # 策略 A: 加载库中现有的第一个图纸
             CURRENT_DRAWING_ID = drawings[0]
             grid_array, color_code_count = load_drawing_from_sqlite(CURRENT_DRAWING_ID)
         else:
-            # 策略 B: 调用 db_manager 中的封装函数创建全新的空白图纸
-            # 注意：传入 current_color_db 确保逻辑函数能找到颜色库
             new_id = "default_blank"
-            grid_array, color_code_count = create_blank_drawing_logic(
-                new_id, 40, 40, current_color_db
-            )
+            # 修正：此处删除了多余的 current_color_db 参数
+            grid_array, color_code_count = create_blank_drawing_logic(new_id, 40, 40)
             CURRENT_DRAWING_ID = new_id
             drawings = [new_id]
 
-    # 5. 准备调色盘数据（逻辑保持不变）
-    from image_utils import _COLOR_CACHE, init_color_cache
+    # 5. 准备调色盘
     if _COLOR_CACHE is None:
         init_color_cache(current_color_db) 
         
@@ -486,14 +476,16 @@ def draw_page():
                 "l_lab": float(row[4]), "a_lab": float(row[5]), "b_lab": float(row[6])
             }
 
+    # 确保 grid 是 list 格式传给前端 JSON
+    grid_list = grid_array.tolist() if grid_array is not None else []
+
     return render_template('draw_page.html', 
-                            grid=grid_array.tolist(), 
+                            grid=grid_list, 
                             palette=palette,         
                             color_counts=color_code_count,
                             drawings=drawings,
                             current_id=CURRENT_DRAWING_ID)
 
-# 新建空白图纸
 @app.route('/api/create_blank', methods=['POST'])
 def create_blank():
     global CURRENT_DRAWING_ID
@@ -503,8 +495,8 @@ def create_blank():
     height = int(data.get('height', 40))
 
     try:
-        # 直接调用 db_manager 中的逻辑
-        create_blank_drawing_logic(drawing_id, width, height, current_color_db)
+        # 修正：删除了 current_color_db 参数，防止报错
+        create_blank_drawing_logic(drawing_id, width, height)
         CURRENT_DRAWING_ID = drawing_id
         
         return jsonify({
@@ -515,13 +507,11 @@ def create_blank():
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
 
-# 裁剪图纸
 @app.route('/api/crop_drawing', methods=['POST'])
 def crop_drawing():
     data = request.json
     drawing_id = CURRENT_DRAWING_ID
     try:
-        # 调用封装好的逻辑函数
         new_counts = crop_drawing_logic(
             drawing_id, 
             data['x1'], data['y1'], 
@@ -529,21 +519,18 @@ def crop_drawing():
         )
         return jsonify({"status": "success", "new_counts": new_counts})
     except Exception as e:
-        print(f"裁剪失败: {e}")
         return jsonify({"status": "error", "msg": str(e)}), 500
 
-#加载已有图纸接口
 @app.route('/api/load_drawing', methods=['POST'])
 def load_drawing_api():
     global CURRENT_DRAWING_ID
     drawing_id = request.json.get('drawing_id')
     
     if os.path.exists(get_db_path(drawing_id)):
-        CURRENT_DRAWING_ID = drawing_id # 切换当前操作的图纸上下文
+        CURRENT_DRAWING_ID = drawing_id 
         return jsonify({"status": "success"})
     return jsonify({"status": "error", "msg": "图纸文件不存在"}), 404
 
-#单格更新
 @app.route('/api/update_pixel', methods=['POST'])
 def update_pixel():
     data = request.json
@@ -551,6 +538,7 @@ def update_pixel():
         r, c = int(data['r']), int(data['c'])
         new_id = str(data['new_id'])
         
+        # 提取可选参数
         l_lab = data.get('l_lab', 0)
         a_lab = data.get('a_lab', 0)
         b_lab = data.get('b_lab', 0)
@@ -558,7 +546,6 @@ def update_pixel():
         g_rgb = data.get('g_rgb', 0)
         b_rgb = data.get('b_rgb', 0)
         
-        # 调用更新函数，传入所有必要参数
         new_counts = update_pixel_in_db(
             CURRENT_DRAWING_ID, r, c, new_id,
             l_lab=l_lab, a_lab=a_lab, b_lab=b_lab,
@@ -574,7 +561,6 @@ def update_pixel():
         print(f"API Error: {e}")
         return jsonify({"status": "error", "msg": str(e)}), 500
 
-#同色替换
 @app.route('/api/batch_update', methods=['POST'])
 def batch_update():
     data = request.json
@@ -583,22 +569,21 @@ def batch_update():
     
     new_counts = batch_update_in_db(CURRENT_DRAWING_ID, old_id, new_id)
     
+    # 注意：如果 batch_update 返回 None (例如没有颜色被替换)，前端也应该收到 success
     if new_counts is not None:
         return jsonify({"status": "success", "new_counts": new_counts})
     else:
-        # 如果返回 None，可能是 ID 相同或更新过程中出现异常
         return jsonify({"status": "success", "msg": "无需更新或更新未执行"})
 
-#撤销步骤
 @app.route('/api/undo', methods=['POST'])
 def undo_action():
     from db_manager import undo_logic
     drawing_id = CURRENT_DRAWING_ID
     
-    if undo_logic(drawing_id,10):
+    if undo_logic(drawing_id, 10):
         return jsonify({"status": "success", "msg": "撤销成功"})
     else:
-        return jsonify({"status": "error", "msg": "QAQ没有可撤销的步骤"}), 400
+        return jsonify({"status": "error", "msg": "没有可撤销的步骤"}), 400
 
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5000)

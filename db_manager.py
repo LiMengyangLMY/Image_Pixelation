@@ -4,6 +4,10 @@ import numpy as np
 import os
 import shutil
 from image_utils import save_drawing_to_sqlite,load_drawing_from_sqlite
+from flask_mail import Mail, Message
+import random
+import threading
+from datetime import datetime, timedelta
 #路径设置
 USER_DB_PATH = './data/users.db'
 DB_DIR = './data/DrawingData'
@@ -342,3 +346,69 @@ def set_user_level(username, level):
     finally:
         conn.close()
 
+# 生成6位数字验证码
+def generate_verification_code():
+    return str(random.randint(100000, 999999))
+
+#————————————————————————————————————————#
+#                邮箱服务                 #
+#————————————————————————————————————————#   
+# 数据库操作：存储验证码
+def save_verification_code(email, code):
+    conn = sqlite3.connect('./data/users.db')
+    cursor = conn.cursor()
+    
+    # 计算过期时间 (当前时间 + 5分钟)
+    expire_at = (datetime.now() + timedelta(minutes=5)).strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 你的 init_user_db.py 中已经定义了 email_verify 表
+    # 逻辑：先删除该邮箱旧的验证码（防止多次发送导致积压），再插入新的
+    cursor.execute("DELETE FROM email_verify WHERE email = ?", (email,))
+    cursor.execute("INSERT INTO email_verify (email, code, expire_at) VALUES (?, ?, ?)", 
+                   (email, code, expire_at))
+    
+    conn.commit()
+    conn.close()
+
+# 数据库操作：校验验证码
+def verify_code_logic(email, code):
+    conn = sqlite3.connect('./data/users.db')
+    cursor = conn.cursor()
+    
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 查询验证码且未过期
+    cursor.execute("""
+        SELECT id FROM email_verify 
+        WHERE email = ? AND code = ? AND expire_at > ?
+    """, (email, code, now_str))
+    
+    row = cursor.fetchone()
+    
+    # 验证成功后，立即删除验证码，防止二次使用
+    if row:
+        cursor.execute("DELETE FROM email_verify WHERE email = ?", (email,))
+        conn.commit()
+        conn.close()
+        return True
+    
+    conn.close()
+    return False
+
+# 通过邮箱更新密码
+def update_password_by_email(email, new_password_hash):
+    """通过邮箱重置密码"""
+    conn = sqlite3.connect(USER_DB_PATH)
+    cursor = conn.cursor()
+    try:
+        # 更新密码
+        cursor.execute("UPDATE users SET password_hash = ? WHERE email = ?", 
+                       (new_password_hash, email))
+        conn.commit()
+        # rowcount > 0 表示找到了该邮箱并更新成功
+        return cursor.rowcount > 0
+    except Exception as e:
+        print(f"重置密码失败: {e}")
+        return False
+    finally:
+        conn.close()

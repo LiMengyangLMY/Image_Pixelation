@@ -195,68 +195,244 @@
         document.querySelectorAll('.form-section').forEach(s => s.classList.remove('active'));
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
         
-        document.getElementById(sectionId).classList.add('active');
+        // 兼容 ID 映射
+        const sectionMap = { 'login': 'login', 'register': 'register', 'vip': 'vip', 'forgot': 'forgot' };
         const tabMap = { 'login': 'tab-login', 'register': 'tab-register', 'vip': 'tab-vip' };
-        if (tabMap[sectionId]) document.getElementById(tabMap[sectionId]).classList.add('active');
+        
+        const activeSection = document.getElementById(sectionMap[sectionId]);
+        if(activeSection) activeSection.classList.add('active');
+        
+        const activeTab = document.getElementById(tabMap[sectionId]);
+        if(activeTab) activeTab.classList.add('active');
     }
 
-    // 模拟发送验证码逻辑（含倒计时）
-    function sendEmailCode(type) {
-        const btnId = type === 'register' ? 'btn-r-code' : 'btn-f-code';
+    // 通用提示函数
+    function showToast(msg) {
+        alert(msg); // 暂时用 alert，也可以后续换成更漂亮的弹窗
+    }
+
+    // ————————————————————————————————
+    //        1. 发送验证码逻辑
+    // ————————————————————————————————
+    async function sendEmailCode(type) {
+        // 确定是注册还是找回密码
+        const isRegister = type === 'register';
+        const emailInputId = isRegister ? 'r_email' : 'f_email';
+        const btnId = isRegister ? 'btn-r-code' : 'btn-f-code';
+        
+        const email = document.getElementById(emailInputId).value.trim();
         const btn = document.getElementById(btnId);
+
+        // 简单校验
+        if (!email) {
+            showToast("请先填写邮箱地址！");
+            return;
+        }
+
+        // UI 倒计时
         let timeLeft = 60;
-        
         btn.disabled = true;
-        const timer = setInterval(() => {
-            if (timeLeft <= 0) {
-                clearInterval(timer);
-                btn.innerText = "获取验证码";
-                btn.disabled = false;
+        btn.innerText = "发送中...";
+
+        try {
+            // === 真正的后端调用 ===
+            const res = await fetch('/api/send_email_code', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: email })
+            });
+            const data = await res.json();
+
+            if (data.status === 'success') {
+                showToast("✅ 验证码已发送，请查收邮件");
+                // 启动倒计时
+                const timer = setInterval(() => {
+                    timeLeft--;
+                    btn.innerText = `${timeLeft}s 后重发`;
+                    if (timeLeft <= 0) {
+                        clearInterval(timer);
+                        btn.innerText = "获取验证码";
+                        btn.disabled = false;
+                    }
+                }, 1000);
             } else {
-                btn.innerText = `${timeLeft}s 后重发`;
-                timeLeft--;
+                showToast("❌ 发送失败: " + data.msg);
+                btn.disabled = false;
+                btn.innerText = "获取验证码";
             }
-        }, 1000);
-        
-        console.log(`向 ${type} 流程发送验证码请求`);
-        // 此处明天对接: fetch('/api/send_code', { method: 'POST', body: ... })
+        } catch (e) {
+            console.error(e);
+            showToast("❌ 网络请求错误，请检查服务器");
+            btn.disabled = false;
+            btn.innerText = "获取验证码";
+        }
     }
 
-    // 注册处理逻辑 (含二次密码确认)
+    // ————————————————————————————————
+    //           2. 注册逻辑
+    // ————————————————————————————————
     async function handleRegister() {
+        const username = document.getElementById('r_user').value.trim();
+        const email = document.getElementById('r_email').value.trim();
+        const vcode = document.getElementById('r_vcode').value.trim();
         const pwd = document.getElementById('r_pwd').value;
         const pwdConfirm = document.getElementById('r_pwd_confirm').value;
 
+        if (!username || !email || !vcode || !pwd) {
+            showToast("请填写完整信息");
+            return;
+        }
         if (pwd !== pwdConfirm) {
-            alert("错误：两次输入的密码不一致！");
+            showToast("两次输入的密码不一致！");
             return;
         }
-
         if (pwd.length < 6) {
-            alert("密码太短，请至少设置6位字符");
+            showToast("密码至少需要6位");
             return;
         }
 
-        alert("校验通过，正在向服务器提交注册数据...");
-        // 此处明天对接: fetch('/api/register', ...)
+        try {
+            const res = await fetch('/api/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: username,
+                    email: email,
+                    password: pwd,
+                    vcode: vcode
+                })
+            });
+            const data = await res.json();
+
+            if (data.status === 'success') {
+                showToast("🎉 注册成功！请登录");
+                showSection('login'); // 自动跳回登录页
+            } else {
+                showToast("注册失败: " + data.msg);
+            }
+        } catch (e) {
+            showToast("网络错误");
+        }
     }
 
-    // 找回密码处理逻辑 (含二次密码确认)
+    // ————————————————————————————————
+    //           3. 登录逻辑
+    // ————————————————————————————————
+    async function handleLogin() {
+        const account = document.getElementById('l_user').value.trim();
+        const pwd = document.getElementById('l_pwd').value;
+
+        if (!account || !pwd) {
+            showToast("请输入账号和密码");
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    account: account,
+                    password: pwd
+                })
+            });
+            const data = await res.json();
+
+            if (data.status === 'success') {
+                // showToast("登录成功！");
+                window.location.href = '/'; // 跳转到首页
+            } else {
+                showToast("登录失败: " + data.msg);
+            }
+        } catch (e) {
+            showToast("网络错误");
+        }
+    }
+
+    // ————————————————————————————————
+    //           4. VIP 激活逻辑
+    // ————————————————————————————————
+    async function handleActivateVIP() {
+        const username = document.getElementById('v_user').value.trim();
+        const code = document.getElementById('v_code').value.trim();
+
+        if (!username || !code) {
+            showToast("请输入用户名和卡密");
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/activate_vip', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: username,
+                    code: code
+                })
+            });
+            const data = await res.json();
+            
+            if (data.status === 'success') {
+                showToast("🎉 " + data.msg);
+            } else {
+                showToast("❌ " + data.msg);
+            }
+        } catch(e) {
+            showToast("网络错误");
+        }
+    }
+    
+    // 找回密码
     async function handleResetPassword() {
+        // 1. 获取输入值
+        const email = document.getElementById('f_email').value.trim();
+        const vcode = document.getElementById('f_vcode').value.trim();
         const newPwd = document.getElementById('f_new_pwd').value;
         const newPwdConfirm = document.getElementById('f_new_pwd_confirm').value;
 
+        // 2. 前端校验
+        if (!email || !vcode || !newPwd) {
+            showToast("请填写完整信息（邮箱、验证码、新密码）");
+            return;
+        }
         if (newPwd !== newPwdConfirm) {
-            alert("错误：两次输入的新密码不一致！");
+            showToast("两次输入的新密码不一致！");
+            return;
+        }
+        if (newPwd.length < 6) {
+            showToast("新密码至少需要6位");
             return;
         }
 
-        alert("验证码校验中，准备重置密码...");
+        // 3. 发送请求
+        try {
+            const res = await fetch('/api/reset_password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    email: email,
+                    vcode: vcode,
+                    password: newPwd
+                })
+            });
+            const data = await res.json();
+            
+            if (data.status === 'success') {
+                showToast("✅ " + data.msg);
+                // 重置成功后，自动切回登录页
+                setTimeout(() => {
+                    showSection('login');
+                    // 贴心地帮用户把邮箱填回去
+                    document.getElementById('l_user').value = email;
+                }, 1500);
+            } else {
+                showToast("❌ " + data.msg);
+            }
+        } catch(e) {
+            console.error(e);
+            showToast("网络错误，请稍后再试");
+        }
     }
-
-    // 登录与激活暂不涉及确认密码，直接留空等待 Day 2 对接
-    function handleLogin() { alert("正在登录..."); }
-    function handleActivateVIP() { alert("正在核验卡密有效性..."); }
 </script>
 
 </body>

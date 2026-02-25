@@ -1,84 +1,140 @@
-# 拼豆图纸生成网页
-
-运行app.py
-网页登录http://localhost:5000
-
 [TOC]
-# 文件结构
-## 文件树状结构
-│  app.py
-│  color_data.csv
-│  db_manager.py
-│  file_manager.py
-│  image_utils.py
-│  readData.py
-│  README.md
+# 拼豆图纸生成工坊 (Perler Bead Pattern Generator)
+
+这是一个基于 Flask 的 Web 应用，致力于将用户上传的图片智能转换为拼豆（Perler Beads）图纸。项目集成了图像降色算法、在线像素编辑器、以及完整的用户账户体系（含邮件验证与 VIP 会员机制）。
+
+
+
+## 快速开始
+
+### 1. 初始化数据库
+
+首次运行项目前，必须初始化用户数据库：
+
+```bash
+python init_user_db.py
+
+```
+
+*如果后续更新了代码导致数据库报错，可运行 `python fix_db.py` 进行无损修复。*
+
+### 2. 配置邮件服务 (关键)
+
+打开 `app.py`，找到 `邮件配置 (SMTP)` 部分，填入你的邮箱信息。
+**注意**：`MAIL_PASSWORD` 必须填写邮箱的 **授权码** (Authorization Code)，而非登录密码。
+
+```python
+# app.py 示例配置
+app.config['MAIL_SERVER'] = 'smtp.qq.com'      # 例如 QQ 邮箱
+app.config['MAIL_PORT'] = 465
+app.config['MAIL_USE_SSL'] = True
+app.config['MAIL_USERNAME'] = '你的邮箱@qq.com'
+app.config['MAIL_PASSWORD'] = '你的授权码'      # <--- 注意这里！
+app.config['MAIL_DEFAULT_SENDER'] = app.config['MAIL_USERNAME']
+
+```
+
+### 3. 启动服务器
+
+```bash
+python app.py
+
+```
+
+### 4. 访问应用
+
+打开浏览器访问：`http://localhost:5000`
+默认会跳转至登录页面，请先注册账号。
+
+---
+
+## 核心功能
+
+### 1. 用户中心 (login.html)
+
+该页面是系统的门面，采用响应式卡片设计，集成了用户身份验证与权限管理的四大核心模块：
+
+* **多维度登录**：支持通过 **用户名** 或 **注册邮箱** 进行登录。
+* **安全校验**：后端将采用 `werkzeug.security` 对输入的密码进行哈希比对，确保数据安全。
+* **会话管理**：登录成功后，系统通过 `Flask-Login` 保持用户会话，作为访问图纸编辑页面的通行证。
+* **邮箱强绑定**：注册时必须填写有效邮箱，并输入系统发送的 **6位数字验证码** 进行核验。
+* **双重密码确认**：前端强制要求输入两次密码并进行一致性校验，防止因输入失误导致无法登录。
+* **防止重名**：后端自动检测用户名及邮箱的唯一性，避免账号冲突。
+* **VIP 权限激活**：用户输入在第三方平台购买的 **16位唯一激活码** 即可实时升级，解锁 Pro 算法。
+* **密码找回**：支持通过注册邮箱接收验证码，并在输入两次新密码确认后完成重置。
+
+### 2. 图片转图纸 (image_conversion)
+
+* **多格式支持**：支持 JPG, PNG, GIF, BMP 等主流图片格式。
+* **智能降色算法**：
+* **基础版**：基于 KMeans 聚类，快速提取主题色。
+* **Pro 进阶版**：结合 CIELAB 色彩空间与空间邻域算法，自动合并占比 <2% 的杂色，显著提升图纸纯净度。
+
+
+* **自定义参数**：用户可自由设定目标尺寸（网格宽度）、单格像素大小、以及目标颜色数量。
+
+### 3. 在线编辑器 (draw_page)
+
+* **实时交互**：点击网格即可修改颜色。
+* **批量替换**：支持“同色一键替换”，快速调整整体色调。
+* **裁剪工具**：自定义坐标裁剪图纸区域。
+* **撤销机制 (Undo)**：支持 10 步历史记录回滚，防止误操作。
+* **自动保存**：编辑过程中的数据会自动保存至 SQLite 数据库。
+* **导出下载**：生成包含**网格线**、**坐标轴**和**色号图例统计**的高清图纸图片。
+
+---
+
+## 项目结构
+
+### 文件树状结构
+
+```text
+Image_Pixelation/
+│  app.py                   # [核心] Flask 后端入口，路由分发与配置
+│  db_manager.py            # [核心] 数据库操作封装 (用户管理、图纸存取、验证码、快照撤销)
+│  image_utils.py           # [核心] 图像处理算法 (KMeans, CIELAB转换, 绘图渲染)
+│  file_manager.py          # 文件清理工具 (自动清理旧缓存)
+│  init_user_db.py          # 数据库初始化脚本 (建表用)
+│  fix_db.py                # 数据库修复脚本 (补全缺失表)
+│  debug_mail.py            # 邮件发送调试脚本
+│  readData.py              # 颜色库迁移工具 (RGB -> Lab)
+│  README.md                # 项目说明文档
 │
-├─data
-│  ├─Color
-│  │      colors.db
-│  │
-│  ├─DrawingData
-│  │
-│  └─users.db 
+├─data/                     # 数据存储目录
+│  ├─Color/                 # 存放色卡数据库 (colors.db)
+│  ├─DrawingData/           # 存放生成的图纸源文件 (.db) 及撤销快照
+│  └─users.db               # 用户信息与验证码数据库 (由脚本自动生成)
 │
-├─font
-│      arial.ttf
-│      arialbd.ttf
-│      arialbi.ttf
-│      ariali.ttf
-│      ARIALN.TTF
-│      ARIALNB.TTF
-│      ARIALNBI.TTF
-│      ARIALNI.TTF
-│      ariblk.ttf
-│      msyh.ttc
-│      msyhbd.ttc
-│      msyhl.ttc
+├─font/                     # 字体文件 (用于图纸渲染)
 │
-├─static
-│  ├─outputs
-│  │
-│  └─uploads
+├─static/
+│  ├─outputs/               # 转换结果图片缓存
+│  └─uploads/               # 上传原图缓存
 │
-├─templates
-│      colors.html
-│      draw_page.html
-│      image_conversion.html
-│      index.html
-│
-└─__pycache__
-        db_manager.cpython-38.pyc
-        file_manager.cpython-38.pyc
-        image_utils.cpython-38.pyc
-## 文件说明
-### 核心脚本
+└─templates/                # 前端页面
+       index.html           # 首页 / 仪表盘
+       login.html           # 登录 / 注册 / 找回密码 / VIP激活
+       image_conversion.html# 图片转换设置页
+       draw_page.html       # 在线绘图编辑器
+       colors.html          # 色卡管理页
+
+```
+
+### 核心脚本说明
+
 * **app.py**: Flask 后端主程序，负责路由分发和各类 API 接口。
 * **db_manager.py**: 负责图纸数据库的创建、裁剪、单格/批量颜色更新，以及最多 10 步的滚动快照撤销 (`undo`) 逻辑。
 * **file_manager.py**: 文件管理器，用于限制 `static/uploads` 和 `static/outputs` 文件夹内的文件数量（默认最多保留20个），按照修改时间自动清理旧文件。
 * **image_utils.py**: 核心图像处理工具。包含图片转像素网格、KMeans 聚类降色、基于 CIELAB 空间的 Pro 版杂色合并算法，以及图纸的可视化渲染（带网格线和图例）。
 * **readData.py**: 数据库迁移脚本。用于读取颜色的 RGB 值，将其转换为 Lab 色彩空间值，并覆盖更新到 `colors.db` 中。
-#### data 文件夹
-用于存放 SQLite 数据库文件。
-* **Color**: 存放颜色数据库。`colors.db` 是默认数据库，注意 `colors.db` 数据库不能删。
-* **DrawingData**: 用于存放生成的单张图纸源数据库文件及其撤销快照。
-#### static 文件夹
-由于用于缓存输入输出图片。
-* **outputs**: 存放处理后输出的图纸图片。
-* **uploads**: 存放用户上传的原始图片。
-
-# 数据结构
-## 核心数据库结构定义
-
-### 用户数据库 (users.db)
-根据 Day 1 的最终讨论结果，这里为你提供 **Markdown (md)** 格式的用户数据库结构。你可以直接将其覆盖到你的 `README.md` 文件中。
 
 ---
 
-## 核心数据库结构定义
-### 用户数据库 (users.db)
-用于存储用户信息、登录凭证及等级权限。
-**表名**: `users`
+## 数据库结构
+
+### 1. 用户数据库 (users.db)
+
+**表名**: `users` (存储用户信息)
 | 字段名 | 类型 | 说明 |
 | --- | --- | --- |
 | **id** | INTEGER | 主键，自动递增。 |
@@ -86,13 +142,10 @@
 | **email** | TEXT | 用户邮箱，用于找回密码及身份标识 (UNIQUE)。 |
 | **password_hash** | TEXT | 经过哈希加密后的密码存储。 |
 | **user_level** | TEXT | 用户等级：`common` (普通) 或 `vip` (VIP)。 |
-| **security_question** | TEXT | 安全问题（可选，用于无邮箱环境找回密码）。 |
-| **security_answer** | TEXT | 安全问题答案（哈希存储）。 |
+| **vip_expire_at** | DATETIME | VIP 过期时间 (VIP 用户特有)。 |
 | **created_at** | DATETIME | 账户注册时间，默认为 `CURRENT_TIMESTAMP`。 |
 
-### VIP 卡密数据库 (users.db)
-用于存储预生成的 VIP 激活码，支持“售卖-激活”模式。
-**表名**: `vip_codes`
+**表名**: `vip_codes` (VIP 卡密)
 | 字段名 | 类型 | 说明 |
 | --- | --- | --- |
 | **code** | TEXT | 16位随机卡密 (PRIMARY KEY)。 |
@@ -100,85 +153,103 @@
 | **used_by** | TEXT | 使用该卡密的用户用户名。 |
 | **valid_days** | INTEGER | 该卡密提供的 VIP 天数（如 31 天或 365 天）。 |
 
-### 邮箱验证表 (users.db)
-用于临时存放注册或找回密码时的验证码。
-**表名**: `email_verify`
+**表名**: `email_verify` (邮箱验证码)
 | 字段名 | 类型 | 说明 |
 | --- | --- | --- |
 | **email** | TEXT | 目标邮箱。 |
 | **code** | TEXT | 6位数字验证码。 |
-| **expire_at** | DATETIME | 过期时间（通常为生成后的 5-10 分钟）。 |
+| **expire_at** | DATETIME | 过期时间（通常为生成后的 5 分钟）。 |
 
-### 颜色库 (colors.db)
+### 2. 颜色库 (colors.db)
+
 用于存储可用的标准颜色色版。
-**表名**: colors
-**字段**: num (TEXT/INT), R, G, B, lab_l, lab_a, lab_b
-### 图纸源数据库 ({drawing_id}.db)
+**表名**: `colors`
+**字段**: `num` (TEXT/INT), `R`, `G`, `B`, `lab_l`, `lab_a`, `lab_b`
+
+### 3. 图纸源数据库 ({drawing_id}.db)
+
 用于存储单张图纸的像素排布和统计元数据。
-**表 grid**: r (INTEGER), c (INTEGER), color_id (TEXT)
-**表 metadata**:
-key='dimensions': value 为 [rows, cols] 的 JSON 字符串。
-key='color_code_count': value 为包含颜色 ID 及其详情的 JSON 字典。
+**表名**: `grid`
+| 字段名 | 类型 | 说明 |
+| --- | --- | --- |
+| **r** | INTEGER | 行坐标 |
+| **c** | INTEGER | 列坐标 |
+| **color_id** | TEXT | 颜色编号 |
 
-# 功能
-## 用户中心 (login.html)
-该页面是系统的门面，采用响应式卡片设计，集成了用户身份验证与权限管理的四大核心模块：
-### 1. 登录与身份持久化
-* **多维度登录**：支持通过 **用户名** 或 **注册邮箱** 进行登录。
-* **安全校验**：后端将采用 `werkzeug.security` 对输入的密码进行哈希比对，确保数据安全。
-* **会话管理**：登录成功后，系统通过 `Flask-Login` 保持用户会话，作为访问图纸编辑页面的通行证。
-### 2. 注册与邮箱验证
-* **邮箱强绑定**：注册时必须填写有效邮箱，并输入系统发送的 **6位数字验证码** 进行核验。
-* **双重密码确认**：前端强制要求输入两次密码并进行一致性校验，防止因输入失误导致无法登录。
-* **防止重名**：后端自动检测用户名及邮箱的唯一性，避免账号冲突。
-### 3. VIP 权限激活（卡密系统）
-* **自主激活**：用户输入在第三方平台购买的 **16位唯一激活码** 即可实时升级。
-* **等级划分**：激活后用户等级由 `common` 提升至 `vip`，解锁 **Pro 进阶降色算法** 等高级功能。
-* **防重复使用**：数据库实时记录卡密使用状态及使用者信息，确保卡密安全。
-### 4. 密码管理与找回
-* **邮箱自助找回**：当用户忘记密码时，可通过注册邮箱接收验证码，并在输入两次新密码确认后完成重置。
-* **安全重置逻辑**：找回密码流程同样包含“二次密码确认”，确保用户修改后的密码准确无误。
-* **修改密码**：支持登录用户在个人设置中直接更新登录凭证。
-## 首页 (index 页面)
-1. **数据库概览**：查看系统 `Color` 目录下现有的颜色数据库列表。
-2. **状态显示**：显示当前正在使用的主颜色数据库名称。
-3. **导航系统**：作为系统的入口，可跳转至图片转换图纸、编辑图纸和颜色数据库管理页面。
-## 图片转图纸 (image_conversion 页面)
-1. **图片上传与格式校验**：支持上传 `png`, `jpg`, `jpeg`, `gif`, `bmp` 格式的图片，最大限制 16MB。
-2. **自定义尺寸参数**：可自由设定目标图纸的网格宽度 (target_width) 和单格像素大小 (pixel_size)。
-3. **基础转换**：直接计算原图像素点的 LAB 值，并匹配颜色库中最相近的色号生成拼豆图纸。
-4. **普通降色功能 (reduce_colors)**：利用 KMeans 聚类算法，将图片包含的颜色种类压缩到用户指定的数量 (color_count)。
-5. **Pro 进阶降色 (reduce_colors_Pro)**：在 KMeans 聚类的基础上，通过 CIELAB 色彩空间计算颜色距离，自动将占比低于 2% 的“稀有杂色”合并到邻近或全局的最优主流颜色中，大幅提升图纸的纯净度和拼豆实操的可行性。
-6. **结果展示与缓存控制**：直观展示原图和生成图纸的对比；每次转换后自动调用清理机制，防止图片堆积占用磁盘空间。
-### 图纸编辑 (draw_page 页面)
-1. **图纸数据载入与管理**
-   * **自动加载**：从转image_conversion页面进入时，会自动加载刚才生成的图纸源数据。
-   * **新建空白图纸**：支持输入宽、高尺寸，自动使用 "H2"（默认白色）填满生成新图纸。
-   * **保存修改**：通过 API 随时将网页端修改的数据保存为后端的 `.db` 源文件。
-2. **图纸导出功能**
-   * **下载可视化图纸**：将当前的 `.db` 像素排布数据渲染生成一张包含**坐标轴、网格线和色号/数量图例统计**的高质量 `.png` 图片并下载。
-   * **下载图纸源数据**：*（备注：目前后端有加载逻辑，下载源 `.db` 文件等功能可配合前端实现）*
-3. **交互修改功能**
-   * **快照与撤销机制**：在执行裁切、单格修改、批量修改前，系统会自动创建 `.snap_x` 滚动快照（最多保留 10 步），支持随时一键撤回操作 (`Undo`)。
-   * **单格更换**：选定目标颜色后，更新指定行/列坐标的单个网格颜色，并自动更新颜色总数统计。
-   * **同色批量替换**：锁定某一旧色号，一键将其在全图中全部替换为指定的新色号，并完成计数的合并/增减。
-   * **图纸裁剪**：根据传入的起始和结束坐标框选裁剪保留图纸区域，并重新统计新区域内的颜色数据。
-   * *(以下为待对接或完善前端交互的功能)*：上传图纸源数据功能、右键快速取色功能。
+**表名**: `metadata`
 
-### 颜色库管理 (colors 页面)
-1. **颜色库展示**：用于提供前端颜色库管理的入口。
-2. **安全保护**：禁止随意删除原始颜色数据库 `colors.db`，确保系统基础功能运行不报错。
+* `key='dimensions'`: value 为 `[rows, cols]` 的 JSON 字符串。
+* `key='color_code_count'`: value 为包含颜色 ID 及其详情的 JSON 字典。
 
-## 注意
-聚类函数不要写为下面的形式(当前scikit-learn版本不支持)：**n_init='auto'** 改为**n_init=10**
+---
+
+## 环境依赖
+
+本项目基于 Python 3.8+ 开发。
+
+### 安装依赖库
+
+请在终端运行以下命令安装所需库：
+
+```bash
+pip install flask flask-login flask-mail pillow numpy pandas opencv-python scikit-image scikit-learn
+
 ```
+
+### 特别注意：scikit-learn 版本兼容性
+
+在 `image_utils.py` 中，KMeans 聚类函数的初始化参数需注意版本兼容性。
+**错误写法 (新版 sklearn 不支持)**: `n_init='auto'`
+**正确写法**: `n_init=10`
+
+```python
 kmeans = KMeans(
     n_clusters=int(target_cluster_count), 
     random_state=0, 
-    n_init='auto'  # <--- 问题的核心
+    n_init=10  # <--- 请确保此处为整数
 ).fit(lab_data)
+
 ```
 
+---
 
+## 配置说明
 
+### Windows 主机名报错修复
 
+在 Windows 环境下，`socket` 模块可能因中文计算机名导致邮件发送失败。本项目已在 `app.py` 头部集成自动修复补丁：
+
+```python
+import socket
+try:
+    socket.gethostname = lambda: "localhost"
+except:
+    pass
+
+```
+
+### 自动清理机制
+
+为了防止磁盘占满，`file_manager.py` 会在每次生成新图纸时，自动检查 `static/uploads` 和 `static/outputs` 文件夹，仅保留最新的 20 个文件。
+
+---
+
+## 常见问题排查
+
+**Q1: 点击发送验证码没反应？**
+
+* 检查终端是否有报错信息。
+* 如果是 `ConnectionRefused` 或 `Timeout`，请检查网络是否拦截了 465 端口。
+* 如果是数据库错误，请确保运行了 `init_user_db.py`。
+
+**Q2: 邮件发送报错 `535 Error: authentication failed`？**
+
+* 这是授权码错误。请去邮箱设置里重新生成一个新的授权码，替换到 `app.py` 中。
+
+**Q3: 注册时提示 `Database is locked`？**
+
+* SQLite 是单文件数据库，不支持高并发写入。请确保没有使用 DB Browser 等软件同时打开 `users.db` 并在编辑模式下。
+
+**Q4: 图纸生成全是黑色或颜色不对？**
+
+* 请确保 `data/Color/colors.db` 存在且数据完整。如果缺失，请从备份恢复或运行 `readData.py` 重建颜色库。
