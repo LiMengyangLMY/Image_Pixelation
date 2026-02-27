@@ -36,6 +36,45 @@
         
         /* 裁剪模式样式 */
         .crop-active { cursor: nwse-resize !important; }
+
+        /* 参考图悬浮窗样式*/
+        #ref-window {
+            position: fixed; top: 120px; right: 360px; /* 默认放在画布右上方区域 */
+            width: 300px; height: 350px;
+            background: rgba(255,255,255,0.95); border: 1px solid #ccc; 
+            border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); 
+            z-index: 1000; display: none; /* 默认隐藏 */
+            flex-direction: column; 
+            resize: both; overflow: hidden; /* CSS原生支持窗口拉伸放大缩小 */
+        }
+        .ref-header {
+            background: #f8f9fa; padding: 8px 12px; border-bottom: 1px solid #eee;
+            font-weight: bold; font-size: 13px; display: flex; 
+            justify-content: space-between; align-items: center; 
+            cursor: move; user-select: none;
+        }
+        .ref-body {
+            flex: 1; position: relative; overflow: hidden; background: #e9ecef;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .ref-upload-box { text-align: center; padding: 20px; width: 100%; }
+        #ref-img-container {
+            width: 100%; height: 100%; position: absolute; top: 0; left: 0;
+            cursor: grab; overflow: hidden;
+        }
+        #ref-img-container:active { cursor: grabbing; }
+        #ref-img {
+            position: absolute; transform-origin: top left; pointer-events: none; /* 禁用默认图片拖拽以支持自定义拖拽 */
+        }
+
+        /* 新增：吸色模式下的十字光标 */
+        .picker-crosshair {
+            cursor: crosshair !important;
+        }
+        /* 左键按住拖拽时，优先显示抓取手势 */
+        .picker-cursor:active {
+            cursor: grabbing !important;
+        }
     </style>
 </head>
 <body>
@@ -44,6 +83,7 @@
     <span class="navbar-brand mb-0 h1">🎨 实时数据库绘图编辑器</span>
     <div class="d-flex align-items-center">
         <span class="text-light me-3 small">缩放: <span id="zoom-val">100</span>%</span>
+        <button class="btn btn-outline-info btn-sm me-2" onclick="toggleRefWindow()">我要参考图！！！</button>
         <button class="btn btn-outline-light btn-sm me-2" onclick="adjustZoom(1.2)">放大</button>
         <button class="btn btn-outline-light btn-sm me-2" onclick="adjustZoom(0.8)">缩小</button>
         <button class="btn btn-outline-warning btn-sm me-2" onclick="triggerUndo()">↩️ 撤回 (Ctrl+Z)</button>
@@ -55,6 +95,29 @@
     <div class="stats-header" id="stats-drag">📊 颜色统计 <small id="total-info"></small></div>
     <div id="stats-content"></div>
 </div>
+
+<div id="ref-window">
+    <div class="ref-header" id="ref-drag">
+        <div class="d-flex align-items-center">
+            <span class="me-3">🖼️ 绘图参考</span>
+            <div class="form-check form-switch mb-0" style="font-size: 12px; font-weight: normal; margin-top: 2px;">
+                <input class="form-check-input" type="checkbox" id="ref-picker-toggle" checked title="开启后在图片上右键可自动吸取色号">
+                <label class="form-check-label" for="ref-picker-toggle" style="cursor: pointer;">右键吸色</label>
+            </div>
+        </div>
+        <button type="button" class="btn-close btn-sm" onclick="toggleRefWindow()" style="font-size: 10px;"></button>
+    </div>
+    
+    <div class="ref-body">
+            <div class="ref-upload-box" id="ref-upload-box">
+                <p class="small text-muted mb-2">请选择本地参考图片</p>
+                <input type="file" id="ref-local-upload" class="form-control form-control-sm" accept="image/*" onchange="loadRefImage(event)">
+            </div>
+            <div id="ref-img-container" style="display: none;">
+                <img id="ref-img" src="" alt="参考图">
+            </div>
+        </div>
+    </div>
 
 <div class="main-container">
     <div id="canvas-area">
@@ -639,6 +702,236 @@ canvas.onmouseup = async (e) => {
             console.error(e);
             alert("网络请求出错");
         }
+    }
+
+    // 参考图浮窗逻辑 (面向对象封装版)//
+    // ================= 新增：参考图浮窗逻辑 (面向对象封装版 + 右键取色) ================= //
+    class ReferenceWindowManager {
+        constructor() {
+            // 1. 获取 DOM 元素
+            this.win = document.getElementById('ref-window');
+            this.dragHandle = document.getElementById('ref-drag');
+            this.uploadBox = document.getElementById('ref-upload-box');
+            this.imgContainer = document.getElementById('ref-img-container');
+            this.img = document.getElementById('ref-img');
+            this.pickerToggle = document.getElementById('ref-picker-toggle');
+
+            // 隐藏的 canvas，专门用来极速读取图片像素颜色
+            this.hiddenCanvas = document.createElement('canvas');
+            this.hiddenCtx = this.hiddenCanvas.getContext('2d', { willReadFrequently: true });
+
+            // 2. 初始化内部状态
+            this.imgState = { x: 0, y: 0, scale: 1 };
+            
+            this.isImgDragging = false;
+            this.imgDragStart = { x: 0, y: 0 };
+            
+            this.isWinDragging = false;
+            this.winOffset = [0, 0];
+
+            // 3. 绑定所有事件监听
+            this._bindEvents();
+
+            //初始化鼠标样式
+            if (this.pickerToggle) {
+            this._updateCursor();
+            this.pickerToggle.addEventListener('change', () => this._updateCursor());
+            }
+        }
+
+        // --- 对外暴露的 API ---
+
+        // 切换窗口显示状态
+        toggle() {
+            if (!this.win) return;
+            this.win.style.display = this.win.style.display === 'flex' ? 'none' : 'flex';
+        }
+
+        // 读取本地图片
+        loadImage(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                this.img.src = e.target.result;
+                this.img.onload = () => {
+                    this.uploadBox.style.display = 'none';
+                    this.imgContainer.style.display = 'block';
+                    
+                    // [新增] 将图片按原始比例画入内存中的隐藏 Canvas，准备取色
+                    this.hiddenCanvas.width = this.img.naturalWidth;
+                    this.hiddenCanvas.height = this.img.naturalHeight;
+                    this.hiddenCtx.drawImage(this.img, 0, 0);
+
+                    // 重置状态
+                    this.imgState = { x: 0, y: 0, scale: 1 };
+                    this._updateTransform();
+                }
+            }
+            reader.readAsDataURL(file);
+        }
+
+        // --- 内部私有方法 ---
+
+        // 更新图片 CSS 变形
+        _updateTransform() {
+            this.img.style.transform = `translate(${this.imgState.x}px, ${this.imgState.y}px) scale(${this.imgState.scale})`;
+        }
+
+        _updateCursor() {
+        if (this.pickerToggle.checked) {
+            this.imgContainer.classList.add('picker-crosshair');
+        } else {
+            this.imgContainer.classList.remove('picker-crosshair');
+        }
+    }
+
+        // 集中绑定各种复杂交互事件
+        _bindEvents() {
+            if (this.pickerToggle) {
+                this.pickerToggle.addEventListener('change', () => this._updateCursor());
+            }
+
+            // [窗口拖拽]
+            this.dragHandle.addEventListener('mousedown', (e) => {
+                this.isWinDragging = true;
+                this.winOffset = [this.win.offsetLeft - e.clientX, this.win.offsetTop - e.clientY];
+                e.stopPropagation();
+            });
+            document.addEventListener('mousemove', (e) => {
+                if (!this.isWinDragging) return;
+                this.win.style.left = (e.clientX + this.winOffset[0]) + "px";
+                this.win.style.top = (e.clientY + this.winOffset[1]) + "px";
+                this.win.style.right = 'auto'; 
+                this.win.style.bottom = 'auto';
+            });
+            document.addEventListener('mouseup', () => this.isWinDragging = false);
+
+            // [图片平移]
+            this.imgContainer.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return; // 仅限左键拖动
+                this.isImgDragging = true;
+                this.imgDragStart = { x: e.clientX - this.imgState.x, y: e.clientY - this.imgState.y };
+                e.stopPropagation(); 
+            });
+            this.imgContainer.addEventListener('mousemove', (e) => {
+                if (!this.isImgDragging) return;
+                this.imgState.x = e.clientX - this.imgDragStart.x;
+                this.imgState.y = e.clientY - this.imgDragStart.y;
+                this._updateTransform();
+                e.stopPropagation();
+            });
+            this.imgContainer.addEventListener('mouseup', (e) => {
+                if (e.button !== 0) return;
+                this.isImgDragging = false;
+                e.stopPropagation();
+            });
+            this.imgContainer.addEventListener('mouseleave', () => this.isImgDragging = false);
+
+            // [图片中心点缩放]
+            this.imgContainer.addEventListener('wheel', (e) => {
+                e.preventDefault(); 
+                e.stopPropagation();
+
+                const zoomFactor = 1.1;
+                const delta = e.deltaY < 0 ? zoomFactor : 1 / zoomFactor;
+                
+                const rect = this.imgContainer.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+
+                const relX = (mouseX - this.imgState.x) / this.imgState.scale;
+                const relY = (mouseY - this.imgState.y) / this.imgState.scale;
+
+                this.imgState.scale *= delta;
+                this.imgState.scale = Math.max(0.1, Math.min(this.imgState.scale, 20)); // 限制 0.1倍 到 20倍
+
+                this.imgState.x = mouseX - relX * this.imgState.scale;
+                this.imgState.y = mouseY - relY * this.imgState.scale;
+
+                this._updateTransform();
+            }, { passive: false });
+
+            // 右键参考图取色
+            this.imgContainer.addEventListener('contextmenu', async (e) => {
+                if (!this.pickerToggle || !this.pickerToggle.checked) {
+                                return;
+                            }
+
+                e.preventDefault(); // 阻止浏览器默认的右键菜单
+                e.stopPropagation();
+
+                // 如果图片还没加载完，直接退出
+                if (!this.img.src || this.img.src.endsWith(window.location.host + '/')) return;
+
+                // 1. 获取鼠标相对于容器的坐标
+                const rect = this.imgContainer.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+
+                // 2. 扣除平移和缩放，计算出真实的图像原始像素坐标
+                const relX = mouseX - this.imgState.x;
+                const relY = mouseY - this.imgState.y;
+                const nativeX = Math.floor(relX / this.imgState.scale);
+                const nativeY = Math.floor(relY / this.imgState.scale);
+
+                // 3. 安全校验：确保点击在图片范围内
+                if (nativeX >= 0 && nativeX < this.img.naturalWidth && nativeY >= 0 && nativeY < this.img.naturalHeight) {
+                    
+                    // 从内存里的隐藏 canvas 中提取这个像素的 RGB [r, g, b, a]
+                    const pixelData = this.hiddenCtx.getImageData(nativeX, nativeY, 1, 1).data;
+                    const r = pixelData[0], g = pixelData[1], b = pixelData[2], a = pixelData[3];
+                    
+                    // 忽略全透明区域的点击
+                    if (a === 0) return; 
+
+                    // 4. 发送请求匹配色号，加上动效掩盖延迟
+                    const originalTitle = document.title;
+                    document.title = "🔍 正在匹配色号...";
+                    
+                    try {
+                        // 复用你已有的后端接口
+                        const resp = await fetch('/api/find_nearest_color', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ r: r, g: g, b: b })
+                        });
+                        
+                        if (resp.ok) {
+                            const data = await resp.json();
+                            if (data.status === 'success') {
+                                // 复用主画布的颜色设置逻辑
+                                setTarget(data.code, data.rgb, data.lab);
+                                document.title = `🎯 成功吸取参考色: ${data.code}`;
+                                // 1.5秒后恢复原本的网页标题
+                                setTimeout(() => document.title = originalTitle, 1500);
+                            } else {
+                                alert("颜色匹配失败: " + data.msg);
+                                document.title = originalTitle;
+                            }
+                        }
+                    } catch (err) {
+                        console.error("取色网络错误", err);
+                        document.title = originalTitle;
+                    }
+                }
+            });
+        }
+    }
+
+    // 实例化并绑定给全局 HTML 的 onclick 事件
+    let refWinApp;
+    window.addEventListener('DOMContentLoaded', () => {
+        refWinApp = new ReferenceWindowManager();
+    });
+
+    // 暴露给 HTML 中 onclick / onchange 的接口
+    function toggleRefWindow() {
+        if(refWinApp) refWinApp.toggle();
+    }
+    function loadRefImage(event) {
+        if(refWinApp) refWinApp.loadImage(event);
     }
 </script>
 </body>
