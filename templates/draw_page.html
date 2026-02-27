@@ -106,8 +106,28 @@
 
         <div class="step-box">
             <div class="step-title"><span class="step-num">4</span> 目标色号</div>
-               <div id="palette-list" class="palette-container">
-                {# 这里改用 palette 进行遍历，以显示色库中的所有颜色 #}
+            
+            <div class="d-flex align-items-center mb-2 justify-content-center border rounded p-2 bg-white">
+                <span class="me-2 small fw-bold text-muted">当前目标:</span>
+                <div id="target-color-swatch" style="width: 22px; height: 22px; border: 1px solid #aaa; border-radius: 4px; margin-right: 8px;"></div>
+                <span id="target-id-display" class="badge bg-primary">未选择</span>
+            </div>
+
+            <div class="mb-2">
+                <div class="input-group input-group-sm mb-1">
+                    <input type="text" id="search-code-input" class="form-control" placeholder="输入色号快速查找">
+                    <button class="btn btn-outline-secondary" onclick="findColorByCode()">查找</button>
+                </div>
+                <div class="input-group input-group-sm mb-1">
+                    <input type="number" id="search-r" class="form-control px-1 text-center" placeholder="R" min="0" max="255">
+                    <input type="number" id="search-g" class="form-control px-1 text-center" placeholder="G" min="0" max="255">
+                    <input type="number" id="search-b" class="form-control px-1 text-center" placeholder="B" min="0" max="255">
+                    <button class="btn btn-outline-success" onclick="findColorByRGB()">相近色</button>
+                </div>
+                <div class="text-muted" style="font-size: 11px;">💡 提示: 在画布上<strong>右键点击</strong>可直接吸取颜色</div>
+            </div>
+
+            <div id="palette-list" class="palette-container mt-2">
                 {% for id, info in palette.items() %}
                 <div class="swatch-wrapper" 
                     id="swatch-{{id}}"
@@ -116,9 +136,6 @@
                     <div class="swatch-id">{{id}}</div>
                 </div>
                 {% endfor %}
-            </div>
-            <div class="mt-2 text-center">
-                <span id="target-id-display" class="badge bg-primary">未选择</span>
             </div>
         </div>
 
@@ -154,21 +171,31 @@
 
 
     // 修改目标数据结构
-    let targetData = { id: null, rgb: [0, 0, 0], lab: [0, 0, 0] };
+    let targetData = { 
+    id: null, 
+    rgb: [240, 240, 240], // 默认背景色
+    lab: [0, 0, 0]         // 确保始终是数组
+    };
 
     // 确保它能处理 4 个参数
     function setTarget(id, rgb, lab, el) {
-        if (!el) return; // 安全检查
-
-        targetData = { 
-            id: String(id), 
-            rgb: rgb, 
-            lab: lab 
-        }; 
+        targetData = { id: String(id), rgb: rgb, lab: lab }; 
         document.querySelectorAll('.swatch-wrapper').forEach(w => w.classList.remove('active'));
-        el.classList.add('active');
+        
+        if (el) {
+            el.classList.add('active');
+        } else {
+            // 如果是通过代码或右键触发的，尝试在列表中高亮并滚动到该元素
+            const targetEl = document.getElementById(`swatch-${id}`);
+            if (targetEl) {
+                targetEl.classList.add('active');
+                targetEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        }
  
         document.getElementById('target-id-display').innerText = id;
+        // 更新颜色图例
+        document.getElementById('target-color-swatch').style.backgroundColor = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
     }
 
     // 修改像素点击处理函数
@@ -180,25 +207,26 @@
         const col = Math.floor((e.clientX - rect.left) / curSize);
         const row = Math.floor((e.clientY - rect.top) / curSize);
         
+        if (row < 0 || row >= grid.length || col < 0 || col >= grid[0].length) return;
+
         const oldId = String(grid[row][col][0]);
         const newId = String(targetData.id);
-        if (oldId === newId) return;
+        if (oldId === newId) return; // 颜色一样，无需修改
 
         const path = editMode === 'single' ? '/api/update_pixel' : '/api/batch_update';
         
-        // 构建请求体，包含 LAB 和 RGB
+        // [核心修复] 加入三元运算符，确保 LAB 不存在时填 0，防止报错中断
         const body = {
             r: row,
             c: col,
-            old_id: oldId, // 批量替换需要
+            old_id: oldId, 
             new_id: newId,
-            // 传入当前选中的颜色属性
-            l_lab: targetData.lab[0],
-            a_lab: targetData.lab[1],
-            b_lab: targetData.lab[2],
-            r_rgb: targetData.rgb[0],
-            g_rgb: targetData.rgb[1],
-            b_rgb: targetData.rgb[2]
+            l_lab: targetData.lab ? targetData.lab[0] : 0,
+            a_lab: targetData.lab ? targetData.lab[1] : 0,
+            b_lab: targetData.lab ? targetData.lab[2] : 0,
+            r_rgb: targetData.rgb ? targetData.rgb[0] : 0,
+            g_rgb: targetData.rgb ? targetData.rgb[1] : 0,
+            b_rgb: targetData.rgb ? targetData.rgb[2] : 0
         };
 
         try {
@@ -210,9 +238,7 @@
 
             if (resp.ok) {
                 const data = await resp.json();
-                // 后端应返回完整的 new_counts (即更新后的 meta_data)
                 if (data && data.new_counts) {
-                    // 更新本地网格数据
                     if (editMode === 'single') {
                         grid[row][col] = [newId];
                     } else {
@@ -220,17 +246,18 @@
                             for(let c=0; c<grid[0].length; c++)
                                 if(String(grid[r][c][0]) === oldId) grid[r][c] = [newId];
                     }
-                    
-                    // 核心：使用后端返回的最新 metadata 更新 UI
                     colorCounts = data.new_counts;
                     updateStatsUI(); 
                     render();
-                } else {
-                    console.error("Metadata update failed: Server returned null");
                 }
+            } else {
+                // [核心修复] 如果后端报错，现在一定会弹窗告诉你原因！
+                const errData = await resp.json();
+                alert("替换失败：" + (errData.msg || "未知错误"));
             }
         } catch (err) {
             console.error("Network error:", err);
+            alert("请求异常，请按 F12 检查控制台网络日志");
         }
     }
 
@@ -399,6 +426,8 @@
 
     // 鼠标事件
     canvas.onmousedown = (e) => {
+        if (e.button !== 0) return; // [新增] 如果不是左键（比如右键），直接无视
+        
         const rect = canvas.getBoundingClientRect();
         const curSize = baseCellSize * zoom;
         const x = Math.floor((e.clientX - rect.left) / curSize);
@@ -406,43 +435,45 @@
 
         if (isCropMode) {
             cropStart = {x, y};
-            // 自由选区模式下，按下鼠标即开始
             if (!document.getElementById('crop-mode-toggle').checked) {
                 cropEnd = {x, y};
             }
         }
     };
 
+    //  加入防抖机制，避免鼠标移动时画布狂刷新导致假死
+    let lastHoverCell = null;
+    // 修复后的鼠标移动逻辑
     canvas.onmousemove = (e) => {
     const rect = canvas.getBoundingClientRect();
     const curSize = baseCellSize * zoom;
     const x = Math.floor((e.clientX - rect.left) / curSize);
     const y = Math.floor((e.clientY - rect.top) / curSize);
 
-    // 边界检查
     if (y < 0 || y >= grid.length || x < 0 || x >= grid[0].length) return;
 
+    // 防抖：仅在跨越格子时触发
+    const currentCell = `${x},${y}`;
+    if (lastHoverCell === currentCell) return;
+    lastHoverCell = currentCell;
+
     if (isCropMode) {
-        // 裁剪模式：关闭高亮模式
-        highlightId = null; // 裁剪时关闭高亮
-        const isFixed = document.getElementById('crop-mode-toggle').checked;
-        if (isFixed) {
+        highlightId = null;
+        if (document.getElementById('crop-mode-toggle').checked) {
             cropStart = {x, y};
         } else if (cropStart) {
             cropEnd = {x, y};
         }
     } else {
-        //非剪裁模式&&同色替换模式：同色边框高亮
-        if (editMode === 'batch') {
-            highlightId = String(grid[y][x][0]);
-        } else {
-            highlightId = null;
-        }
+        // 只有批量模式才需要高亮同色格子
+        highlightId = (editMode === 'batch') ? String(grid[y][x][0]) : null;
     }
-    render(); // 统一触发重绘
+    render(); 
 };
 
-    canvas.onmouseup = async (e) => {
+canvas.onmouseup = async (e) => {
+        if (e.button !== 0) return; // [新增] 仅允许左键触发修改和裁剪
+
         if (isCropMode && cropStart) {
             const isFixed = document.getElementById('crop-mode-toggle').checked;
             let x1, y1, x2, y2;
@@ -524,6 +555,91 @@
     document.onmouseup = () => isDragging = false;
 
     window.onload = () => { render(); updateStatsUI(); };
+
+    // ================= 新增功能逻辑 ================= //
+
+    // 1. 右键吸色功能
+    canvas.oncontextmenu = (e) => {
+        e.preventDefault(); // 阻止浏览器默认右键菜单
+        if (isCropMode) return; // 裁剪模式下禁用
+        
+        const rect = canvas.getBoundingClientRect();
+        const curSize = baseCellSize * zoom;
+        const col = Math.floor((e.clientX - rect.left) / curSize);
+        const row = Math.floor((e.clientY - rect.top) / curSize);
+        
+        if (row < 0 || row >= grid.length || col < 0 || col >= grid[0].length) return;
+        
+        let rawCell = grid[row][col];
+        const code = Array.isArray(rawCell) ? String(rawCell[0]) : String(rawCell);
+        
+        const info = palette[code];
+        if (info) {
+            const rgb = info.r_rgb !== undefined ? [info.r_rgb, info.g_rgb, info.b_rgb] : [info[0], info[1], info[2]];
+            const lab = info.l_lab !== undefined ? [info.l_lab, info.a_lab, info.b_lab] : [0, 0, 0];
+            setTarget(code, rgb, lab);
+            
+            // 简单的吸取成功提示
+            const originalTitle = document.title;
+            document.title = `🎯 已吸取: ${code}`;
+            setTimeout(() => document.title = originalTitle, 1000);
+        }
+    };
+
+    // 2. 输入色号查找
+    function findColorByCode() {
+        const code = document.getElementById('search-code-input').value.trim();
+        if (!code) return;
+        
+        const info = palette[code];
+        if (info) {
+            const rgb = info.r_rgb !== undefined ? [info.r_rgb, info.g_rgb, info.b_rgb] : [info[0], info[1], info[2]];
+            const lab = info.l_lab !== undefined ? [info.l_lab, info.a_lab, info.b_lab] : [0, 0, 0];
+            setTarget(code, rgb, lab);
+        } else {
+            alert(`在当前色库中未找到色号: ${code}`);
+        }
+    }
+
+    // 支持回车键查找色号
+    document.getElementById('search-code-input').addEventListener('keypress', function (e) {
+        if (e.key === 'Enter') findColorByCode();
+    });
+
+    // 3. 输入 RGB 查找相近色
+    async function findColorByRGB() {
+        const r = document.getElementById('search-r').value;
+        const g = document.getElementById('search-g').value;
+        const b = document.getElementById('search-b').value;
+        
+        if (r === '' || g === '' || b === '') {
+            alert("请完整输入 R, G, B 的数值（0-255）");
+            return;
+        }
+
+        try {
+            const resp = await fetch('/api/find_nearest_color', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ r: Number(r), g: Number(g), b: Number(b) })
+            });
+            
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.status === 'success') {
+                    setTarget(data.code, data.rgb, data.lab);
+                    alert(`已自动为您匹配最接近的色号: ${data.code}`);
+                } else {
+                    alert("匹配失败: " + data.msg);
+                }
+            } else {
+                alert("请求失败，请检查网络或后端日志");
+            }
+        } catch (e) {
+            console.error(e);
+            alert("网络请求出错");
+        }
+    }
 </script>
 </body>
 </html>

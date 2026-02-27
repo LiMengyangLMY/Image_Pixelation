@@ -366,11 +366,15 @@ def visualize_color_array(color_array, color_code_count, pixel_scale=30):
     return output_img
 
 def save_drawing_to_sqlite(drawing_id, color_array, color_code_count):
-    db_dir = './data/DrawingData'
-    if not os.path.exists(db_dir):
-        os.makedirs(db_dir)
-        
-    db_path = os.path.join(db_dir, f"{drawing_id}.db")
+    # 局部导入，避免循环依赖
+    from db_manager import get_db_path
+    
+    # 获取基于当前用户的专属路径 (例如 user_101/xxx.db)
+    db_path = get_db_path(drawing_id)
+    
+    # 确保用户的专属目录存在
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
@@ -395,7 +399,10 @@ def save_drawing_to_sqlite(drawing_id, color_array, color_code_count):
     conn.close()
 
 def load_drawing_from_sqlite(drawing_id):
-    db_path = os.path.join('./data/DrawingData', f"{drawing_id}.db")
+    # 局部导入
+    from db_manager import get_db_path
+    db_path = get_db_path(drawing_id)
+    
     if not os.path.exists(db_path):
         return None, None
 
@@ -418,7 +425,6 @@ def load_drawing_from_sqlite(drawing_id):
         return None, None
     finally:
         conn.close()
-
 #——————————————————————————————————————————#
 # ---------------- 封装接口 ----------------#
 #——————————————————————————————————————————#

@@ -1,4 +1,3 @@
-
 [TOC]
 # 拼豆图纸生成工坊 (Perler Bead Pattern Generator)
 
@@ -27,10 +26,9 @@
 
 首次运行项目前，必须初始化用户数据库：
 
-```bash
+bash
 python init_user_db.py
 
-```
 
 *如果后续更新了代码导致数据库报错，可运行 `python fix_db.py` 进行无损修复。*
 
@@ -39,7 +37,7 @@ python init_user_db.py
 打开 `app.py`，找到 `邮件配置 (SMTP)` 部分，填入你的邮箱信息。
 **注意**：`MAIL_PASSWORD` 必须填写邮箱的 **授权码** (Authorization Code)，而非登录密码。
 
-```python
+python
 # app.py 示例配置
 app.config['MAIL_SERVER'] = 'smtp.qq.com'      # 例如 QQ 邮箱
 app.config['MAIL_PORT'] = 465
@@ -48,23 +46,20 @@ app.config['MAIL_USERNAME'] = '你的邮箱@qq.com'
 app.config['MAIL_PASSWORD'] = '你的授权码'      # <--- 注意这里！
 app.config['MAIL_DEFAULT_SENDER'] = app.config['MAIL_USERNAME']
 
-```
 
 ### 3. 安装依赖库
 
 本项目依赖 Python 3.8+。为了支持后台自动清理任务，请确保安装了 `APScheduler`：
 
-```bash
+bash
 pip install flask flask-login flask-mail pillow numpy pandas opencv-python scikit-image scikit-learn apscheduler
 
-```
 
 ### 4. 启动服务器
 
-```bash
+bash
 python app.py
 
-```
 
 ### 5. 访问应用
 
@@ -89,23 +84,23 @@ python app.py
 
 * **多格式支持**：支持 JPG, PNG, GIF, BMP 等主流图片格式。
 * **智能降色算法**：
-* **基础版**：基于 KMeans 聚类，快速提取主题色。
-* **Pro 进阶版**：结合 CIELAB 色彩空间与空间邻域算法，自动合并占比 <2% 的杂色，显著提升图纸纯净度。
-
-
+    * **基础版**：基于 KMeans 聚类，快速提取主题色。
+    * **Pro 进阶版**：结合 CIELAB 色彩空间与空间邻域算法，自动合并占比 <2% 的杂色，显著提升图纸纯净度。
 * **自定义参数**：用户可自由设定目标尺寸（网格宽度）、单格像素大小、以及目标颜色数量。
 
 ### 3. 在线编辑器 (draw_page)
 
-* **实时交互**：点击网格即可修改颜色。
+* **实时交互与防抖**：点击网格即可丝滑修改颜色，内置严格的鼠标事件防抖机制，保障大幅面图纸修改时的浏览器性能。
+* **高级辅助拾色工具**：
+    * **右键吸管**：支持在画布上右键点击任意像素格，瞬间将其提取为当前目标色。
+    * **色号直搜**：通过输入准确的色号，快速在庞大的色卡库中定位。
+    * **RGB 智能找色**：输入任意 RGB 数值，底层借助 Lab 空间欧氏距离算法，自动为您匹配最相近的已有拼豆颜色。
 * **批量替换**：支持“同色一键替换”，快速调整整体色调。
-* **裁剪工具**：自定义坐标裁剪图纸区域。
+* **裁剪工具**：自定义坐标或拖拽鼠标裁剪图纸区域。
 * **撤销机制 (Undo)**：根据用户等级提供 5步 或 10步 的历史记录回滚。
 * **自动保存**：
-* **VIP**：实时保存至云端 `user_{id}` 目录，永久存储。
-* **普通用户**：实时更新至临时文件，超时（5小时）自动销毁。
-
-
+    * **VIP**：实时保存至云端 `user_{id}` 目录，永久存储。
+    * **普通用户**：实时更新至临时文件，超时（5小时）自动销毁。
 * **导出下载**：生成包含**网格线**、**坐标轴**和**色号图例统计**的高清图纸图片。
 
 ---
@@ -114,7 +109,7 @@ python app.py
 
 ### 文件树状结构
 
-```text
+text
 Image_Pixelation/
 │  app.py                   # [核心] Flask 后端入口，集成了 APScheduler 后台清理任务
 │  db_manager.py            # [核心] 负责路径路由、权限判断、撤销快照及数据库操作
@@ -145,24 +140,17 @@ Image_Pixelation/
        draw_page.html       # 在线绘图编辑器
        colors.html          # 色卡管理页
 
-```
 
 ### 核心脚本逻辑说明
 
 * **app.py**:
-* 启动时初始化 `BackgroundScheduler`，每 60 分钟调用一次 `file_manager.run_auto_clean`。
-* 废除全局变量 `CURRENT_DRAWING_ID`，改用 `session['drawing_id']` 追踪用户当前操作的图纸。
-
-
+    * 启动时初始化 `BackgroundScheduler`，每 60 分钟调用一次 `file_manager.run_auto_clean`。
+    * 废除全局变量 `CURRENT_DRAWING_ID`，改用 `session['drawing_id']` 追踪用户当前操作的图纸。
 * **db_manager.py**:
-* **`get_db_path(drawing_id)`**: 核心路由函数。检测 `current_user` 状态，将文件读写请求重定向到 `data/DrawingData/user_{id}/`。
-* **`save_snapshot`**: 在保存快照时，根据 `user_level` 动态决定保留 5 个还是 10 个备份。
-
-
+    * **`get_db_path(drawing_id)`**: 核心路由函数。检测 `current_user` 状态，将文件读写请求重定向到 `data/DrawingData/user_{id}/`。
+    * **`save_snapshot`**: 在保存快照时，根据 `user_level` 动态决定保留 5 个还是 10 个备份。
 * **file_manager.py**:
-* **`run_auto_clean`**: 定时任务入口。查询数据库获取所有 **普通用户** 的 ID，遍历其文件夹，删除修改时间超过 5 小时的 `.db` 文件。VIP 用户的文件夹会被自动跳过。
-
-
+    * **`run_auto_clean`**: 定时任务入口。查询数据库获取所有 **普通用户** 的 ID，遍历其文件夹，删除修改时间超过 5 小时的 `.db` 文件。VIP 用户的文件夹会被自动跳过。
 
 ---
 
@@ -190,14 +178,13 @@ Image_Pixelation/
 
 在 Windows 环境下，`socket` 模块可能因中文计算机名导致邮件发送失败。本项目已在 `app.py` 头部集成自动修复补丁：
 
-```python
+python
 import socket
 try:
     socket.gethostname = lambda: "localhost"
 except:
     pass
 
-```
 
 ### 特别注意：scikit-learn 版本兼容性
 
@@ -216,5 +203,3 @@ Flask 在 Debug 模式下会启动一个主进程和一个重载进程。为了�
 
 **Q3: 升级 VIP 后，之前的 5 步撤销会变成 10 步吗？**
 是的。升级后，下次操作时系统会自动放宽限制，允许您保存更多历史快照。反之，如果 VIP 过期降级，超出 5 步的旧快照将在下一次操作时被自动清理。
-
-```

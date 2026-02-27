@@ -60,10 +60,6 @@ app.config['UPLOAD_FOLDER'] = 'static/uploads'
 app.config['OUTPUT_FOLDER'] = 'static/outputs'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif', 'bmp'}
-mail_user = os.getenv('MAIL_USERNAME')
-mail_pass = os.getenv('MAIL_PASSWORD')
-app.config['MAIL_USERNAME'] = mail_user
-app.config['MAIL_PASSWORD'] = mail_pass
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 COLOR_DB_DIR = './data/Color/'
@@ -78,7 +74,11 @@ current_color_db = os.path.join(COLOR_DB_DIR, 'colors.db')
 app.config['MAIL_SERVER'] = 'smtp.qq.com'
 app.config['MAIL_PORT'] = 465
 app.config['MAIL_USE_SSL'] = True
-
+# ！！！注意不要直接暴露密钥！！！
+mail_user = os.getenv('MAIL_USERNAME')
+mail_pass = os.getenv('MAIL_PASSWORD')
+app.config['MAIL_USERNAME'] = mail_user
+app.config['MAIL_PASSWORD'] = mail_pass
 app.config['MAIL_DEFAULT_SENDER'] = app.config['MAIL_USERNAME']
 
 mail = Mail(app)
@@ -398,7 +398,7 @@ def download_modified():
 
     grid_array = np.array(grid_array)
     if grid_array.ndim == 2: grid_array = grid_array[:, :, np.newaxis]
-    if _COLOR_CACHE is None: init_color_cache(current_color_db) 
+    if image_utils._COLOR_CACHE is None: init_color_cache(current_color_db) 
 
     try:
         img = visualize_color_array(grid_array, color_code_count, pixel_scale=20) 
@@ -545,8 +545,39 @@ def batch_update():
     new_id = str(data['new_id'])
     new_counts = batch_update_in_db(drawing_id, old_id, new_id)
     return jsonify({"status": "success", "new_counts": new_counts})
-
 @app.route('/api/undo', methods=['POST'])
+
+# 输入rgb找相近色
+@app.route('/api/find_nearest_color', methods=['POST'])
+@login_required
+def api_find_nearest_color():
+    data = request.json
+    try:
+        r = float(data.get('r', 0))
+        g = float(data.get('g', 0))
+        b = float(data.get('b', 0))
+        
+        # 归一化为 0-1 范围，符合 skimage rgb2lab 的输入要求
+        img_np = np.array([[[r / 255.0, g / 255.0, b / 255.0]]], dtype=np.float32)
+        # 调用 image_utils 中的 skimage color 模块
+        img_lab = image_utils.color.rgb2lab(img_np)
+        target_lab = img_lab[0, 0]
+        
+        # 寻找相近色
+        code, rgb, lab = image_utils.find_nearest_color(target_lab)
+        
+        if code is None:
+            return jsonify({"status": "error", "msg": "颜色缓存未初始化"}), 500
+            
+        return jsonify({
+            "status": "success", 
+            "code": code, 
+            "rgb": rgb, 
+            "lab": lab
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)}), 500
+
 @login_required
 def undo_action():
     drawing_id = session.get('drawing_id')
