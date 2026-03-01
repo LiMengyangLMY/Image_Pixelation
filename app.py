@@ -342,9 +342,85 @@ def image_conversion():
     
     return render_template('image_conversion.html')
 
+
 @app.route('/colors')
+@login_required
 def view_colors():
-    return render_template('colors.html')
+    # 1. 连接数据库并读取所有颜色
+    conn = sqlite3.connect(current_color_db)
+    cursor = conn.cursor()
+    cursor.execute("SELECT num, R, G, B, lab_l, lab_a, lab_b FROM colors")
+    rows = cursor.fetchall()
+    conn.close()
+
+    # 2. 对颜色进行分组和数据封装
+    grouped_data = {}
+    for row in rows:
+        num, r, g, b, lab_l, lab_a, lab_b = row
+        num_str = str(num)
+        
+        # 提取字母前缀作为系列名（例如 "A01" 提取为 "A"），无字母则归为 "通用"
+        prefix = ''.join(filter(str.isalpha, num_str))
+        if not prefix:
+            prefix = "通用"
+            
+        # 3. 计算感知亮度 (Luma)，动态决定文字是黑色还是白色，防止看不清
+        luma = (0.299 * r + 0.587 * g + 0.114 * b)
+        text_color = "#ffffff" if luma < 128 else "#000000"
+        hex_color = f"#{r:02x}{g:02x}{b:02x}"
+        
+        color_item = {
+            "num": num_str, "r": r, "g": g, "b": b,
+            "hex": hex_color, "text_color": text_color,
+            "lab": (round(lab_l, 2), round(lab_a, 2), round(lab_b, 2))
+        }
+        
+        if prefix not in grouped_data:
+            grouped_data[prefix] = []
+        grouped_data[prefix].append(color_item)
+        
+    # 4. 按系列名称和色号排序，保证 UI 整洁
+    sorted_grouped_data = {
+        k: sorted(v, key=lambda x: str(x['num'])) 
+        for k, v in sorted(grouped_data.items())
+    }
+
+    return render_template('colors.html', grouped_data=sorted_grouped_data)
+
+@app.route('/update_color', methods=['POST'])
+@login_required
+def update_color():
+    data = request.json
+    num = str(data.get('num'))
+    
+    try:
+        r = int(data.get('r'))
+        g = int(data.get('g'))
+        b = int(data.get('b'))
+        
+        # 1. 重新计算 Lab 色彩空间值，保证降色算法(Pro版)依然精准
+        img_np = np.array([[[r / 255.0, g / 255.0, b / 255.0]]], dtype=np.float32)
+        img_lab = image_utils.color.rgb2lab(img_np)
+        lab_l, lab_a, lab_b = img_lab[0, 0]
+        
+        # 2. 更新 SQLite 数据库
+        conn = sqlite3.connect(current_color_db)
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE colors 
+            SET R=?, G=?, B=?, lab_l=?, lab_a=?, lab_b=? 
+            WHERE num=?
+        """, (r, g, b, float(lab_l), float(lab_a), float(lab_b), num))
+        conn.commit()
+        conn.close()
+        
+        # 3. 关键步：刷新 image_utils 中的全局内存缓存，立即生效
+        init_color_cache(current_color_db)
+        
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)}), 500
+
 
 @app.route('/download_file/<filename>')
 def download_file(filename):
