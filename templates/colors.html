@@ -1,32 +1,62 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>颜色库管理 - 卡通描边优化版</title>
+    <title>颜色库管理 - 拼豆图纸工坊</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         .color-group { margin-bottom: 40px; border-top: 2px solid #eee; padding-top: 20px; }
         .color-card { 
             width: 180px; border-radius: 8px; overflow: hidden; 
             box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: transform 0.2s;
-            cursor: pointer; display: inline-block; margin: 10px; vertical-align: top;
+            display: inline-block; margin: 10px; vertical-align: top;
         }
-        .color-card:hover { transform: translateY(-5px); }
+        /* 只有专属库时，卡片才有点击效果 */
+        .clickable-card { cursor: pointer; }
+        .clickable-card:hover { transform: translateY(-5px); border: 1px solid #0d6efd; }
+        
         .swatch { height: 80px; display: flex; align-items: center; justify-content: center; font-weight: bold; }
         .info { padding: 10px; font-size: 0.75rem; background: #fff; }
         .lab-val { color: #666; font-style: italic; }
         .prefix-badge { font-size: 1.5rem; margin-bottom: 20px; color: #333; }
+        .toolbar { position: sticky; top: 0; z-index: 1000; background: white; border-bottom: 1px solid #ddd; padding: 15px 0; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
     </style>
 </head>
 <body class="bg-light">
-<div class="container py-5">
-    <h1 class="mb-4">颜色库数据库 (Color Database)</h1>
+
+<div class="toolbar mb-4">
+    <div class="container d-flex justify-content-between align-items-center">
+        <div>
+            <a href="/" class="btn btn-outline-secondary me-3">🏠 返回工作台</a>
+            <span class="fw-bold fs-5">颜色库管理</span>
+        </div>
+        
+        <div class="d-flex align-items-center">
+            <label class="me-2 text-muted text-nowrap">当前查看:</label>
+            <select id="dbSelect" class="form-select" style="width: auto; min-width: 200px;" onchange="switchDatabase()">
+                <option value="colors.db" {% if current_db == 'colors.db' %}selected{% endif %}>🔒 系统默认库 (只读)</option>
+                <option value="user_colors.db" {% if current_db == 'user_colors.db' %}selected{% endif %}>✏️ 我的专属库 (可修改)</option>
+            </select>
+        </div>
+    </div>
+</div>
+
+<div class="container py-2">
+    {% if current_db == 'colors.db' %}
+    <div class="alert alert-warning alert-dismissible fade show" role="alert">
+        <strong>提示：</strong> 您当前查看的是系统默认颜色库，受到权限保护，无法点击修改。<br>
+        如需自定义颜色，请在右上角切换到 <b>“我的专属库”</b>。
+    </div>
+    {% endif %}
 
     {% for prefix, colors in grouped_data.items() %}
     <div class="color-group">
         <div class="prefix-badge">系列: {{ prefix }} <span class="badge bg-secondary fs-6">{{ colors|length }} 种</span></div>
         <div class="d-flex flex-wrap">
             {% for c in colors %}
-            <div class="color-card" onclick="editColor('{{ c.num }}', {{ c.r }}, {{ c.g }}, {{ c.b }})">
+            
+            <div class="color-card {% if current_db != 'colors.db' %}clickable-card{% endif %}" 
+                 {% if current_db != 'colors.db' %}onclick="editColor('{{ c.num }}', {{ c.r }}, {{ c.g }}, {{ c.b }})"{% endif %}>
+                
                 <div class="swatch" style="background-color: {{ c.hex }}; color: {{ c.text_color }};">
                     {{ c.num }}
                 </div>
@@ -35,9 +65,12 @@
                     <strong>Lab:</strong> <span class="lab-val">{{ c.lab[0] }}, {{ c.lab[1] }}, {{ c.lab[2] }}</span>
                 </div>
             </div>
+            
             {% endfor %}
         </div>
     </div>
+    {% else %}
+    <div class="alert alert-info text-center mt-5">该颜色库目前是空的。</div>
     {% endfor %}
 </div>
 
@@ -45,7 +78,7 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">修改颜色: <span id="modalTitle"></span></h5>
+                <h5 class="modal-title">修改专属颜色: <span id="modalTitle" class="fw-bold text-primary"></span></h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
@@ -63,7 +96,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-primary" onclick="saveColor()">保存并更新 CSV</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="saveColor()">保存修改</button>
             </div>
         </div>
     </div>
@@ -71,21 +105,37 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+    const currentDb = "{{ current_db }}"; // 获取当前所处的数据库
     let currentNum = '';
-    const modal = new bootstrap.Modal(document.getElementById('editModal'));
+    const editModal = new bootstrap.Modal(document.getElementById('editModal'));
 
+    // 切换数据库
+    function switchDatabase() {
+        const selectedDb = document.getElementById('dbSelect').value;
+        window.location.href = `/colors?db=${selectedDb}`;
+    }
+
+    // 打开编辑弹窗
     function editColor(num, r, g, b) {
+        // 前端二次保护：如果是默认库直接拦截
+        if(currentDb === 'colors.db') {
+            alert("系统默认库受保护，不可修改！");
+            return; 
+        }
+        
         currentNum = num;
         document.getElementById('modalTitle').innerText = num;
         document.getElementById('editR').value = r;
         document.getElementById('editG').value = g;
         document.getElementById('editB').value = b;
-        modal.show();
+        editModal.show();
     }
 
+    // 保存颜色修改
     function saveColor() {
         const payload = {
             num: currentNum,
+            db_name: currentDb, // 核心：明确告诉后端我在改哪个库
             r: document.getElementById('editR').value,
             g: document.getElementById('editG').value,
             b: document.getElementById('editB').value
@@ -95,9 +145,13 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
-        }).then(res => {
-            if (res.ok) location.reload();
-            else alert("保存失败");
+        }).then(res => res.json())
+        .then(data => {
+            if (data.status === 'success') {
+                location.reload(); 
+            } else {
+                alert("失败: " + data.msg); // 如果后端拦截，这里会弹出 403 警告
+            }
         });
     }
 </script>

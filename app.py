@@ -39,7 +39,7 @@ from image_utils import (
 )
 import image_utils
 from db_manager import (
-    COLOR_DB_PATH,
+    DEFAULT_COLOR_DB_PATH,
     create_blank_drawing_logic,
     update_pixel_in_db, 
     batch_update_in_db, 
@@ -48,7 +48,10 @@ from db_manager import (
     save_verification_code,
     verify_code_logic,
     update_password_by_email,
-    undo_logic 
+    undo_logic,
+    create_user_color_db, 
+    delete_user_color_db, 
+    get_user_color_db_dir
 )
 from file_manager import limit_files, run_auto_clean # [新增] 引入后台清理逻辑
 
@@ -346,46 +349,47 @@ def image_conversion():
 @app.route('/colors')
 @login_required
 def view_colors():
-    # 1. 连接数据库并读取所有颜色
-    conn = sqlite3.connect(current_color_db)
+    # 1. 严格获取 URL 参数，如果没有传，强制赋值为 'colors.db'
+    db_name = request.args.get('db')
+    if not db_name:
+        db_name = 'colors.db'
+    
+    try:
+        from db_manager import get_color_db_path
+        target_db = get_color_db_path(db_name)
+    except PermissionError:
+        target_db = get_color_db_path('colors.db')
+        db_name = 'colors.db'
+
+    # 2. 读取数据库
+    import sqlite3
+    conn = sqlite3.connect(target_db)
     cursor = conn.cursor()
     cursor.execute("SELECT num, R, G, B, lab_l, lab_a, lab_b FROM colors")
     rows = cursor.fetchall()
     conn.close()
 
-    # 2. 对颜色进行分组和数据封装
+    # 3. 分组处理
     grouped_data = {}
     for row in rows:
         num, r, g, b, lab_l, lab_a, lab_b = row
         num_str = str(num)
-        
-        # 提取字母前缀作为系列名（例如 "A01" 提取为 "A"），无字母则归为 "通用"
-        prefix = ''.join(filter(str.isalpha, num_str))
-        if not prefix:
-            prefix = "通用"
-            
-        # 3. 计算感知亮度 (Luma)，动态决定文字是黑色还是白色，防止看不清
+        prefix = ''.join(filter(str.isalpha, num_str)) or "通用"
         luma = (0.299 * r + 0.587 * g + 0.114 * b)
         text_color = "#ffffff" if luma < 128 else "#000000"
-        hex_color = f"#{r:02x}{g:02x}{b:02x}"
         
         color_item = {
             "num": num_str, "r": r, "g": g, "b": b,
-            "hex": hex_color, "text_color": text_color,
+            "hex": f"#{r:02x}{g:02x}{b:02x}", "text_color": text_color,
             "lab": (round(lab_l, 2), round(lab_a, 2), round(lab_b, 2))
         }
-        
-        if prefix not in grouped_data:
-            grouped_data[prefix] = []
+        if prefix not in grouped_data: grouped_data[prefix] = []
         grouped_data[prefix].append(color_item)
         
-    # 4. 按系列名称和色号排序，保证 UI 整洁
-    sorted_grouped_data = {
-        k: sorted(v, key=lambda x: str(x['num'])) 
-        for k, v in sorted(grouped_data.items())
-    }
+    sorted_grouped_data = {k: sorted(v, key=lambda x: str(x['num'])) for k, v in sorted(grouped_data.items())}
 
-    return render_template('colors.html', grouped_data=sorted_grouped_data)
+    # 【关键修复】：确保 current_db 绝对不可能为空地传给前端
+    return render_template('colors.html', grouped_data=sorted_grouped_data, current_db=db_name)
 
 @app.route('/update_color', methods=['POST'])
 @login_required
@@ -393,34 +397,37 @@ def update_color():
     data = request.json
     num = str(data.get('num'))
     
-    try:
-        r = int(data.get('r'))
-        g = int(data.get('g'))
-        b = int(data.get('b'))
+    # 获取 db_name，去掉前后的空格
+    db_name = data.get('db_name', '').strip()
+    
+    # 🔴 终极安全锁：只要没传名字，或者是 colors.db，通通拦截！
+    if not db_name or db_name == 'colors.db':
+        return jsonify({"status": "error", "msg": "系统默认库受到严格物理保护，拒绝修改！"}), 403
         
-        # 1. 重新计算 Lab 色彩空间值，保证降色算法(Pro版)依然精准
+    try:
+        r, g, b = int(data.get('r')), int(data.get('g')), int(data.get('b'))
+        import numpy as np
+        import image_utils
+        
         img_np = np.array([[[r / 255.0, g / 255.0, b / 255.0]]], dtype=np.float32)
         img_lab = image_utils.color.rgb2lab(img_np)
         lab_l, lab_a, lab_b = img_lab[0, 0]
         
-        # 2. 更新 SQLite 数据库
-        conn = sqlite3.connect(current_color_db)
+        from db_manager import get_color_db_path
+        target_db = get_color_db_path(db_name)
+        
+        import sqlite3
+        conn = sqlite3.connect(target_db)
         cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE colors 
-            SET R=?, G=?, B=?, lab_l=?, lab_a=?, lab_b=? 
-            WHERE num=?
-        """, (r, g, b, float(lab_l), float(lab_a), float(lab_b), num))
+        cursor.execute("UPDATE colors SET R=?, G=?, B=?, lab_l=?, lab_a=?, lab_b=? WHERE num=?", 
+                       (r, g, b, float(lab_l), float(lab_a), float(lab_b), num))
         conn.commit()
         conn.close()
         
-        # 3. 关键步：刷新 image_utils 中的全局内存缓存，立即生效
-        init_color_cache(current_color_db)
-        
+        image_utils.init_color_cache(target_db)
         return jsonify({"status": "success"})
     except Exception as e:
-        return jsonify({"status": "error", "msg": str(e)}), 500
-
+        return jsonify({"status": "error", "msg": f"保存失败: {str(e)}"}), 500
 
 @app.route('/download_file/<filename>')
 def download_file(filename):
@@ -485,6 +492,74 @@ def download_modified():
         return f"生成图片失败: {str(e)}", 500
 
 # ————————————————————————————————#
+#          用户颜色库管理 API       #
+# ————————————————————————————————#
+@app.route('/api/list_color_dbs', methods=['GET'])
+@login_required
+def api_list_color_dbs():
+    """获取当前用户可用的所有颜色库列表"""
+    dbs = ['colors.db'] # 默认主库永远在第一位
+    
+    user_color_dir = get_user_color_db_dir(current_user.id)
+    if os.path.exists(user_color_dir):
+        # 遍历用户专属目录下的所有 .db 文件
+        for f in os.listdir(user_color_dir):
+            if f.endswith('.db'):
+                dbs.append(f)
+                
+    return jsonify({"status": "success", "databases": dbs})
+
+@app.route('/api/create_color_db', methods=['POST'])
+@login_required
+def api_create_color_db():
+    """用户创建新的颜色库"""
+    data = request.json
+    db_name = data.get('db_name')
+    # 是否从默认库拷贝基础颜色（默认 True）
+    copy_from_default = data.get('copy_from_default', True)
+    
+    if not db_name:
+        return jsonify({"status": "error", "msg": "库名称不能为空"}), 400
+        
+    # 防止用户输入带有后缀的名称，统一处理
+    db_name = db_name.replace('.db', '')
+    
+    try:
+        create_user_color_db(db_name, copy_from_default)
+        return jsonify({"status": "success", "msg": f"颜色库 {db_name}.db 创建成功！"})
+    except PermissionError as e:
+        return jsonify({"status": "error", "msg": str(e)}), 403
+    except FileExistsError as e:
+        return jsonify({"status": "error", "msg": str(e)}), 400
+    except Exception as e:
+        return jsonify({"status": "error", "msg": f"创建失败: {str(e)}"}), 500
+
+@app.route('/api/delete_color_db', methods=['POST'])
+@login_required
+def api_delete_color_db():
+    """用户删除自己的颜色库"""
+    data = request.json
+    db_name = data.get('db_name')
+    
+    # 简单的安全校验：不允许删除 colors.db
+    if db_name == 'colors.db':
+        return jsonify({"status": "error", "msg": "系统默认库受到保护，无法删除"}), 403
+        
+    if not db_name:
+        return jsonify({"status": "error", "msg": "缺少数据库名称"}), 400
+        
+    # 统一去掉后缀
+    db_name = db_name.replace('.db', '')
+        
+    try:
+        delete_user_color_db(db_name)
+        return jsonify({"status": "success", "msg": f"颜色库 {db_name}.db 已删除"})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)}), 500
+
+
+
+# ————————————————————————————————#
 #             绘图页交互           #
 # ————————————————————————————————#
 @app.route('/draw_page')
@@ -532,7 +607,7 @@ def draw_page():
 
     # 准备调色盘
     if image_utils._COLOR_CACHE is None:
-        image_utils.init_color_cache(COLOR_DB_PATH)
+        image_utils.init_color_cache(DEFAULT_COLOR_DB_PATH)
     
     palette = {}
     if image_utils._COLOR_CACHE:

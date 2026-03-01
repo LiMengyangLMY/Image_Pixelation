@@ -9,29 +9,24 @@ from image_utils import save_drawing_to_sqlite, load_drawing_from_sqlite
 
 # ————————————————— 配置路径 —————————————————
 DB_ROOT = './data/DrawingData'
-COLOR_DB_PATH = './data/Color/colors.db'
+COLOR_DB_ROOT = './data/Color'
+DEFAULT_COLOR_DB_PATH = os.path.join(COLOR_DB_ROOT, 'colors.db')
 USER_DB_PATH = './data/users.db'
 
 # ————————————————— 核心：路径路由 —————————————————
 def get_user_dir(user_id):
-    """确保用户的专属目录存在"""
+    """确保用户的专属画图目录存在"""
     user_dir = os.path.join(DB_ROOT, f"user_{user_id}")
     if not os.path.exists(user_dir):
         os.makedirs(user_dir)
     return user_dir
 
 def get_db_path(drawing_id):
-    """
-    Day 4 重构：路径严格基于当前登录用户的 ID。
-    格式：./data/DrawingData/user_{id}/{drawing_id}.db
-    """
-    # 1. 正常登录用户
+    """画图数据路径：基于当前登录用户的 ID"""
     if hasattr(current_user, 'is_authenticated') and current_user.is_authenticated:
         user_dir = get_user_dir(current_user.id)
         return os.path.join(user_dir, f"{drawing_id}.db")
     
-    # 2. 异常兜底（理论上 app.py 的 @login_required 会拦截，但为了代码健壮性）
-    # 如果未登录，存入 public_temp
     public_dir = os.path.join(DB_ROOT, 'public_temp')
     if not os.path.exists(public_dir): os.makedirs(public_dir)
     return os.path.join(public_dir, f"{drawing_id}.db")
@@ -40,18 +35,108 @@ def get_undo_limit():
     """根据用户等级返回撤销步数"""
     if hasattr(current_user, 'is_authenticated') and current_user.is_authenticated:
         if current_user.user_level == 'vip':
-            return 10  # VIP 尊享 10 步
-    return 5           # 普通用户 5 步
+            return 10  
+    return 5           
+
+# ————————————————— 用户颜色库管理逻辑 —————————————————
+def get_user_color_db_dir(user_id):
+    """确保用户的专属颜色库目录存在"""
+    user_color_dir = os.path.join(COLOR_DB_ROOT, f"user_{user_id}")
+    if not os.path.exists(user_color_dir):
+        os.makedirs(user_color_dir)
+    return user_color_dir
+
+def get_color_db_path(db_name):
+    """获取指定的颜色库路径，带有空表自动修复功能"""
+    import os
+    import shutil
+    import sqlite3
+    
+    # 1. 如果前端传的是默认库
+    if db_name == 'colors.db' or not db_name:
+        return DEFAULT_COLOR_DB_PATH
+    
+    # 2. 如果前端传的是专属库
+    if hasattr(current_user, 'is_authenticated') and current_user.is_authenticated:
+        user_color_dir = get_user_color_db_dir(current_user.id)
+        db_path = os.path.join(user_color_dir, "user_colors.db")
+        
+        # 核心逻辑：判断是否需要从默认库复制初始化
+        needs_init = False
+        
+        # 场景 A: 文件根本不存在，或者文件大小为 0 (空壳)
+        if not os.path.exists(db_path) or os.path.getsize(db_path) == 0:
+            needs_init = True
+        else:
+            # 场景 B: 文件存在，但里面可能没有 colors 表 (损坏或意外生成)
+            try:
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='colors'")
+                if not cursor.fetchone():
+                    needs_init = True
+                conn.close()
+            except Exception:
+                needs_init = True # 只要读取报错，一律重置
+                
+        # 执行初始化/修复操作
+        if needs_init:
+            shutil.copy2(DEFAULT_COLOR_DB_PATH, db_path)
+            
+        return db_path
+    else:
+        raise PermissionError("请先登录再操作自定义颜色库。")
+
+def verify_color_db_permission(db_name):
+    """核心拦截器：校验是否有权限对该颜色库进行修改/删除"""
+    if db_name == 'colors.db' or not db_name:
+        raise PermissionError("系统默认颜色库 (colors.db) 受到保护，不允许任何增删改查或删除表的操作！")
+
+def create_user_color_db(db_name, copy_from_default=True):
+    """用户新建自己的颜色库"""
+    verify_color_db_permission(db_name)
+    
+    db_path = get_color_db_path(db_name)
+    if os.path.exists(db_path):
+        raise FileExistsError(f"颜色库 {db_name} 已存在！")
+        
+    if copy_from_default:
+        shutil.copy2(DEFAULT_COLOR_DB_PATH, db_path)
+    else:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute('''CREATE TABLE colors 
+                          (num TEXT PRIMARY KEY, R INTEGER, G INTEGER, B INTEGER, 
+                           lab_l REAL, lab_a REAL, lab_b REAL)''')
+        conn.commit()
+        conn.close()
+    return db_path
+
+def delete_user_color_db(db_name):
+    """用户删除自己的颜色库"""
+    verify_color_db_permission(db_name)
+    
+    db_path = get_color_db_path(db_name)
+    if os.path.exists(db_path):
+        os.remove(db_path)
+    else:
+        raise FileNotFoundError("找不到要删除的颜色库。")
 
 # ————————————————— 辅助函数 —————————————————
-def get_color_info_from_master_db(color_id):
-    """从主颜色库补全丢失的颜色信息"""
+def get_color_info_from_db(color_id, active_color_db='colors.db'):
+    """
+    仅从指定的 active_color_db 查询颜色。
+    如果在该库没找到，直接返回 0 (不再去 colors.db 兜底)。
+    """
+    target_db_path = get_color_db_path(active_color_db)
+    
     try:
-        conn = sqlite3.connect(COLOR_DB_PATH)
+        conn = sqlite3.connect(target_db_path)
         cursor = conn.cursor()
         cursor.execute("SELECT R, G, B, lab_l, lab_a, lab_b FROM colors WHERE num = ?", (str(color_id),))
         row = cursor.fetchone()
         conn.close()
+        
         if row:
             return {
                 "r_rgb": int(row[0]), "g_rgb": int(row[1]), "b_rgb": int(row[2]),
@@ -59,43 +144,36 @@ def get_color_info_from_master_db(color_id):
             }
     except Exception:
         pass
+        
+    # 如果没找到，严格返回全 0（透明/黑）
     return {"r_rgb": 0, "g_rgb": 0, "b_rgb": 0, "l_lab": 0, "a_lab": 0, "b_lab": 0}
 
 # ————————————————— 快照与撤销 —————————————————
 def save_snapshot(drawing_id):
-    """保存快照 (带自动清理多余步数)"""
     max_snapshots = get_undo_limit()
     base_path = get_db_path(drawing_id)
     if not os.path.exists(base_path): return
 
-    # 1. 滚动旧快照 (例如 4->5, 3->4...)
     for i in range(max_snapshots - 1, 0, -1):
         old_snap = f"{base_path}.snap_{i-1}"
         new_snap = f"{base_path}.snap_{i}"
         if os.path.exists(old_snap):
             shutil.copy2(old_snap, new_snap)
 
-    # 2. 保存当前状态为 snap_0
     shutil.copy2(base_path, f"{base_path}.snap_0")
     
-    # 3. 清理超出当前权限的旧快照 (例如 VIP 降级后清理第6-10步)
     for i in range(max_snapshots, 15): 
         excess_snap = f"{base_path}.snap_{i}"
         if os.path.exists(excess_snap):
             os.remove(excess_snap)
 
 def undo_logic(drawing_id):
-    """执行撤销"""
     max_snapshots = get_undo_limit()
     base_path = get_db_path(drawing_id)
     snap_0 = f"{base_path}.snap_0"
-    
     if not os.path.exists(snap_0): return False
 
-    # 恢复数据
     shutil.copy2(snap_0, base_path)
-    
-    # 移除已使用的 snap_0，快照队列前移
     os.remove(snap_0)
     for i in range(1, max_snapshots):
         this_snap = f"{base_path}.snap_{i}"
@@ -104,39 +182,34 @@ def undo_logic(drawing_id):
             os.rename(this_snap, prev_snap)
     return True
 
-# ——————————————————————————————————————————————————#
-#                      图纸操作逻辑 
-# ——————————————————————————————————————————————————#
-def create_blank_drawing_logic(drawing_id, width=40, height=40):
+# ————————————————— 图纸操作逻辑 —————————————————
+def create_blank_drawing_logic(drawing_id, width=40, height=40, active_color_db='colors.db'):
     default_id = "H2"
     h2_data = {"count": width * height, "r_rgb": 255, "g_rgb": 255, "b_rgb": 255, "l_lab": 100, "a_lab": 0, "b_lab": 0}
     
-    # 尝试从颜色库获取白色信息
-    color_info = get_color_info_from_master_db(default_id)
+    color_info = get_color_info_from_db(default_id, active_color_db)
     if color_info['r_rgb'] != 0: h2_data.update(color_info)
 
     new_grid = np.full((height, width, 1), default_id, dtype=object)
     initial_counts = {default_id: h2_data}
     
-    # save_drawing_to_sqlite 会调用 get_db_path，自动路由到 user_{id}
     save_drawing_to_sqlite(drawing_id, new_grid, initial_counts)
     return new_grid, initial_counts
 
-def crop_drawing_logic(drawing_id, x1, y1, x2, y2):
+def crop_drawing_logic(drawing_id, x1, y1, x2, y2, active_color_db='colors.db'):
     grid_array, color_code_count = load_drawing_from_sqlite(drawing_id)
     if grid_array is None: raise Exception("无法加载图纸")
 
     cropped_grid = grid_array[y1:y2+1, x1:x2+1]
     if cropped_grid.shape == grid_array.shape: return color_code_count
 
-    # 重新统计颜色
     new_counts = {}
     for code in cropped_grid.flatten():
         code = str(code)
         if code in new_counts:
             new_counts[code]['count'] += 1
         else:
-            info = color_code_count.get(code, get_color_info_from_master_db(code)).copy()
+            info = color_code_count.get(code, get_color_info_from_db(code, active_color_db)).copy()
             info['count'] = 1
             new_counts[code] = info
 
@@ -144,7 +217,7 @@ def crop_drawing_logic(drawing_id, x1, y1, x2, y2):
     save_drawing_to_sqlite(drawing_id, cropped_grid, new_counts)
     return new_counts
 
-def update_pixel_in_db(drawing_id, r, c, new_id, l_lab=0, a_lab=0, b_lab=0, r_rgb=0, g_rgb=0, b_rgb=0):
+def update_pixel_in_db(drawing_id, r, c, new_id, l_lab=0, a_lab=0, b_lab=0, r_rgb=0, g_rgb=0, b_rgb=0, active_color_db='colors.db'):
     new_id = str(new_id).strip()
     db_path = get_db_path(drawing_id)
     
@@ -161,26 +234,22 @@ def update_pixel_in_db(drawing_id, r, c, new_id, l_lab=0, a_lab=0, b_lab=0, r_rg
 
         cursor.execute("SELECT value FROM metadata WHERE key='color_code_count'")
         meta_data = json.loads(cursor.fetchone()[0])
-        conn.close() # 暂时关闭以释放锁，因为 save_snapshot 要复制文件
+        conn.close() 
         
-        # 1. 保存快照
         save_snapshot(drawing_id)
         
-        # 2. 重新连接写入
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         cursor.execute('UPDATE grid SET color_id = ? WHERE r = ? AND c = ?', (new_id, int(r), int(c)))
         
-        # 更新计数
         if old_id in meta_data:
             meta_data[old_id]['count'] = max(0, meta_data[old_id]['count'] - 1)
         
         if new_id in meta_data:
             meta_data[new_id]['count'] += 1
         else:
-            # 补全元数据
             if r_rgb == 0 and g_rgb == 0:
-                meta_data[new_id] = get_color_info_from_master_db(new_id)
+                meta_data[new_id] = get_color_info_from_db(new_id, active_color_db)
                 meta_data[new_id]['count'] = 1
             else:
                 meta_data[new_id] = {
@@ -197,11 +266,11 @@ def update_pixel_in_db(drawing_id, r, c, new_id, l_lab=0, a_lab=0, b_lab=0, r_rg
     finally:
         if conn: conn.close()
 
-def batch_update_in_db(drawing_id, old_id, new_id):
+def batch_update_in_db(drawing_id, old_id, new_id, active_color_db='colors.db'):
     old_id, new_id = str(old_id), str(new_id)
     if old_id == new_id: return None
     
-    save_snapshot(drawing_id) # 快照
+    save_snapshot(drawing_id)
     
     db_path = get_db_path(drawing_id)
     conn = sqlite3.connect(db_path)
@@ -214,13 +283,12 @@ def batch_update_in_db(drawing_id, old_id, new_id):
             cursor.execute("SELECT value FROM metadata WHERE key='color_code_count'")
             meta_data = json.loads(cursor.fetchone()[0])
             
-            # 更新计数
             if old_id in meta_data: del meta_data[old_id]
             
             if new_id in meta_data:
                 meta_data[new_id]['count'] += change_count
             else:
-                info = get_color_info_from_master_db(new_id)
+                info = get_color_info_from_db(new_id, active_color_db)
                 info['count'] = change_count
                 meta_data[new_id] = info
                 
@@ -231,56 +299,36 @@ def batch_update_in_db(drawing_id, old_id, new_id):
     finally:
         conn.close()
 
-# ——————————————————————————————————————————————————#
-#                     用户与验证码逻辑                
-# ——————————————————————————————————————————————————#
-# 保存验证码到数据库
+# ————————————————— 用户与验证码逻辑 —————————————————
 def save_verification_code(email, code):
     conn = sqlite3.connect(USER_DB_PATH)
     cursor = conn.cursor()
-    
-    # 5分钟有效期
     expire_at = (datetime.now() + timedelta(minutes=5)).strftime('%Y-%m-%d %H:%M:%S')
-    
-    # 先删除旧验证码，防止积压
     cursor.execute("DELETE FROM email_verify WHERE email = ?", (email,))
     cursor.execute("INSERT INTO email_verify (email, code, expire_at) VALUES (?, ?, ?)", 
                    (email, code, expire_at))
-    
     conn.commit()
     conn.close()
 
-# 校验验证码
 def verify_code_logic(email, code):
     conn = sqlite3.connect(USER_DB_PATH)
     cursor = conn.cursor()
-    
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    cursor.execute("""
-        SELECT id FROM email_verify 
-        WHERE email = ? AND code = ? AND expire_at > ?
-    """, (email, code, now_str))
-    
+    cursor.execute("SELECT id FROM email_verify WHERE email = ? AND code = ? AND expire_at > ?", (email, code, now_str))
     row = cursor.fetchone()
-    
     if row:
-        # 验证成功，立即失效防止重放
         cursor.execute("DELETE FROM email_verify WHERE email = ?", (email,))
         conn.commit()
         conn.close()
         return True
-    
     conn.close()
     return False
 
-# 通过邮箱重置密码
 def update_password_by_email(email, new_password_hash):
     conn = sqlite3.connect(USER_DB_PATH)
     cursor = conn.cursor()
     try:
-        cursor.execute("UPDATE users SET password_hash = ? WHERE email = ?", 
-                       (new_password_hash, email))
+        cursor.execute("UPDATE users SET password_hash = ? WHERE email = ?", (new_password_hash, email))
         conn.commit()
         return cursor.rowcount > 0
     except Exception as e:
