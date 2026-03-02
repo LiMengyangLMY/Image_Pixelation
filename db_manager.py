@@ -257,6 +257,7 @@ def update_pixel_in_db(drawing_id, r, c, new_id, l_lab=0, a_lab=0, b_lab=0, r_rg
                 }
         
         cursor.execute('UPDATE metadata SET value = ? WHERE key = ?', (json.dumps(meta_data), 'color_code_count'))
+        meta_data = {k: v for k, v in meta_data.items() if v.get('count', 0) > 0}
         conn.commit()
         return meta_data
     except Exception as e:
@@ -292,6 +293,7 @@ def batch_update_in_db(drawing_id, old_id, new_id, active_color_db='colors.db'):
                 meta_data[new_id] = info
                 
             cursor.execute('UPDATE metadata SET value = ? WHERE key = ?', (json.dumps(meta_data), 'color_code_count'))
+            meta_data = {k: v for k, v in meta_data.items() if v.get('count', 0) > 0}
             conn.commit()
             return meta_data
         return None
