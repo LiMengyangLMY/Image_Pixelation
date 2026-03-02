@@ -59,8 +59,7 @@ def get_color_db_path(db_name):
     # 2. 如果前端传的是专属库
     if hasattr(current_user, 'is_authenticated') and current_user.is_authenticated:
         user_color_dir = get_user_color_db_dir(current_user.id)
-        db_path = os.path.join(user_color_dir, "user_colors.db")
-        
+        db_path = os.path.join(user_color_dir, db_name)
         # 核心逻辑：判断是否需要从默认库复制初始化
         needs_init = False
         

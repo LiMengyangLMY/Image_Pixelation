@@ -30,6 +30,10 @@
             <span class="fw-bold fs-5">颜色库管理</span>
         </div>
         
+        {% if current_db == 'user_colors.db' %}
+        <button class="btn btn-success ms-3" onclick="openAddModal()">➕ 新增颜色</button>
+        {% endif %}
+
         <div class="d-flex align-items-center">
             <label class="me-2 text-muted text-nowrap">当前查看:</label>
             <select id="dbSelect" class="form-select" style="width: auto; min-width: 200px;" onchange="switchDatabase()">
@@ -63,6 +67,9 @@
                 <div class="info">
                     <strong>RGB:</strong> {{ c.r }}, {{ c.g }}, {{ c.b }}<br>
                     <strong>Lab:</strong> <span class="lab-val">{{ c.lab[0] }}, {{ c.lab[1] }}, {{ c.lab[2] }}</span>
+                    {% if current_db == 'user_colors.db' %}
+                    <button class="btn btn-danger btn-sm mt-2 w-100" onclick="deleteColor('{{ c.num }}'); event.stopPropagation();">删除</button>
+                    {% endif %}
                 </div>
             </div>
             
@@ -128,6 +135,7 @@
         document.getElementById('editR').value = r;
         document.getElementById('editG').value = g;
         document.getElementById('editB').value = b;
+        document.querySelector('#editModal .btn-primary').setAttribute('onclick', 'saveColor()');
         editModal.show();
     }
 
@@ -152,6 +160,56 @@
             } else {
                 alert("失败: " + data.msg); // 如果后端拦截，这里会弹出 403 警告
             }
+        });
+    }
+
+    // 新增弹窗逻辑 (可以复用 editModal 的 UI，只需改一下标题和提交函数)
+    const addModal = new bootstrap.Modal(document.getElementById('editModal'));
+
+    function openAddModal() {
+        currentNum = ''; // 清空以标识是新增
+        document.getElementById('modalTitle').innerText = "新增颜色 (例: H999)";
+        // 允许用户自己填色号，所以我们需要临时把标题改成输入框，或者用 JS 简单处理
+        const titleSpan = document.getElementById('modalTitle');
+        titleSpan.innerHTML = '<input type="text" id="addNum" class="form-control form-control-sm" placeholder="输入色号代码">';
+        document.getElementById('editR').value = 0;
+        document.getElementById('editG').value = 0;
+        document.getElementById('editB').value = 0;
+        
+        // 替换保存按钮的 onclick 事件
+        document.querySelector('#editModal .btn-primary').setAttribute('onclick', 'submitAddColor()');
+        addModal.show();
+    }
+
+    function submitAddColor() {
+        const num = document.getElementById('addNum').value.trim();
+        if(!num) return alert("请填写色号");
+
+        fetch('/api/add_color', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                num: num,
+                db_name: currentDb,
+                r: document.getElementById('editR').value,
+                g: document.getElementById('editG').value,
+                b: document.getElementById('editB').value
+            })
+        }).then(res => res.json()).then(data => {
+            if(data.status === 'success') location.reload();
+            else alert(data.msg);
+        });
+    }
+
+    function deleteColor(num) {
+        if(!confirm(`确定要永久删除色号 ${num} 吗？`)) return;
+        fetch('/api/delete_color', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ num: num, db_name: currentDb })
+        }).then(res => res.json()).then(data => {
+            if(data.status === 'success') location.reload();
+            else alert(data.msg);
         });
     }
 </script>

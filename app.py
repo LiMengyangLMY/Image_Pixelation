@@ -306,6 +306,9 @@ def image_conversion():
         file.save(input_path)
 
         try:
+            from db_manager import get_color_db_path
+            db_name = request.form.get('db_name', 'colors.db')
+            target_db_path = get_color_db_path(db_name)
             target_width_cells = int(request.form.get('target_width', 40))
             pixel_size = int(request.form.get('pixel_size', 20))
             with Image.open(input_path) as img:
@@ -316,17 +319,26 @@ def image_conversion():
             is_reduce_Pro_on = request.form.get('reduce_colors_Pro') == 'on'
             target_count = int(request.form.get('color_count', 16))
 
+            is_reduce_on = request.form.get('reduce_colors') == 'on'
+            is_reduce_Pro_on = request.form.get('reduce_colors_Pro') == 'on'
+            target_count = int(request.form.get('color_count', 16))
+
+            # 1. 获取前端传来的数据库名称，并解析为真实文件路径
+            db_name = request.form.get('db_name', 'colors.db')
+            from db_manager import get_color_db_path
+            target_db_path = get_color_db_path(db_name)
+
             if is_reduce_Pro_on:
                 _, processed_img, color_array, color_code_count = reduce_image_colors_Pro(
-                    input_path, output_path, current_color_db, scale_factor=calc_scale_factor, target_color_count=target_count, pixel_scale=pixel_size
+                    input_path, output_path, target_db_path, scale_factor=calc_scale_factor, target_color_count=target_count, pixel_scale=pixel_size
                 )
             elif is_reduce_on:
                 _, processed_img, color_array, color_code_count = reduce_image_colors(
-                    input_path, output_path, current_color_db, scale_factor=calc_scale_factor, target_color_count=target_count, pixel_scale=pixel_size
+                    input_path, output_path, target_db_path, scale_factor=calc_scale_factor, target_color_count=target_count, pixel_scale=pixel_size
                 )
             else:
                 _, processed_img, _, color_array, color_code_count = process_image_with_color_code(
-                    input_path, output_path, current_color_db, scale_factor=calc_scale_factor, pixel_scale=pixel_size
+                    input_path, output_path, target_db_path, scale_factor=calc_scale_factor, pixel_scale=pixel_size
                 )
 
             # 暂存数据 (注意：并发高时建议放入 Session 或 Redis)
@@ -428,6 +440,69 @@ def update_color():
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"status": "error", "msg": f"保存失败: {str(e)}"}), 500
+
+@app.route('/api/add_color', methods=['POST'])
+@login_required
+def api_add_color():
+    data = request.json
+    db_name = data.get('db_name', 'colors.db')
+    num = str(data.get('num')).strip()
+    
+    if db_name == 'colors.db':
+        return jsonify({"status": "error", "msg": "系统默认库受保护，不可添加！"}), 403
+
+    try:
+        r, g, b = int(data.get('r')), int(data.get('g')), int(data.get('b'))
+        import numpy as np
+        import image_utils
+        
+        img_np = np.array([[[r / 255.0, g / 255.0, b / 255.0]]], dtype=np.float32)
+        img_lab = image_utils.color.rgb2lab(img_np)
+        lab_l, lab_a, lab_b = img_lab[0, 0]
+
+        from db_manager import get_color_db_path
+        target_db = get_color_db_path(db_name)
+
+        import sqlite3
+        conn = sqlite3.connect(target_db)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO colors (num, R, G, B, lab_l, lab_a, lab_b) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                       (num, r, g, b, float(lab_l), float(lab_a), float(lab_b)))
+        conn.commit()
+        conn.close()
+
+        image_utils.init_color_cache(target_db)
+        return jsonify({"status": "success", "msg": "添加成功！"})
+    except sqlite3.IntegrityError:
+         return jsonify({"status": "error", "msg": "该色号已存在"}), 400
+    except Exception as e:
+        return jsonify({"status": "error", "msg": f"添加失败: {str(e)}"}), 500
+
+@app.route('/api/delete_color', methods=['POST'])
+@login_required
+def api_delete_color():
+    data = request.json
+    db_name = data.get('db_name', 'colors.db')
+    num = str(data.get('num')).strip()
+
+    if db_name == 'colors.db':
+         return jsonify({"status": "error", "msg": "系统默认库受保护，不可删除！"}), 403
+
+    try:
+        from db_manager import get_color_db_path
+        target_db = get_color_db_path(db_name)
+        
+        import sqlite3
+        conn = sqlite3.connect(target_db)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM colors WHERE num=?", (num,))
+        conn.commit()
+        conn.close()
+        
+        image_utils.init_color_cache(target_db)
+        return jsonify({"status": "success", "msg": "删除成功！"})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": f"删除失败: {str(e)}"}), 500
 
 @app.route('/download_file/<filename>')
 def download_file(filename):
@@ -567,6 +642,11 @@ def api_delete_color_db():
 def draw_page():
     global temp_result_data
     
+    db_name = request.args.get('db', 'colors.db')
+    from db_manager import get_color_db_path
+    target_db_path = get_color_db_path(db_name)
+    import image_utils
+    image_utils.init_color_cache(target_db_path)
     # 1. 确定 Drawing ID (优先级: URL参数 > Session > 新建)
     current_id = request.args.get('id')
     if not current_id:
@@ -624,7 +704,8 @@ def draw_page():
                             color_counts=color_code_count,
                             drawings=drawings, # VIP 才会有列表
                             current_id=current_id,
-                            user_level=current_user.user_level)
+                            user_level=current_user.user_level,
+                            current_db=db_name)
 
 @app.route('/api/create_blank', methods=['POST'])
 @login_required

@@ -137,6 +137,14 @@
         </div>
 
         <div class="step-box">
+            <div class="step-title"><span class="step-num">⚡</span> 颜色库选择</div>
+            <select id="db-selector" class="form-select form-select-sm mb-2" onchange="switchDrawDatabase(this.value)">
+                <option value="colors.db" {% if current_db == 'colors.db' %}selected{% endif %}>系统默认库 (只读)</option>
+                <option value="user_colors.db" {% if current_db == 'user_colors.db' %}selected{% endif %}>我的专属库 (可增删改)</option>
+            </select>
+        </div>
+
+        <div class="step-box">
             <div class="step-title"><span class="step-num">2</span> 裁剪图纸</div>
             <div class="form-check form-switch mb-2 small">
                 <input class="form-check-switch" type="checkbox" id="crop-mode-toggle" onchange="updateCropUI()">
@@ -259,6 +267,15 @@
         document.getElementById('target-id-display').innerText = id;
         // 更新颜色图例
         document.getElementById('target-color-swatch').style.backgroundColor = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+    }
+
+    //选择颜色数据库
+    function switchDrawDatabase(newDb) {
+        const urlParams = new URLSearchParams(window.location.search);
+        urlParams.set('db', newDb);
+        const currentId = "{{ current_id }}";
+        if (currentId) urlParams.set('id', currentId);
+        window.location.href = window.location.pathname + '?' + urlParams.toString();
     }
 
     // 修改像素点击处理函数
