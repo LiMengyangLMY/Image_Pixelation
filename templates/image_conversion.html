@@ -250,15 +250,21 @@
                     <img src="{{ original_image }}" alt="原始图片">
                 </div>
                 <div class="image-box">
-                    <h3>处理后图片</h3>
-                    <img src="{{ processed_image }}" alt="处理后图片">
-                    {% set filename = processed_image.split('/')[-1] %}
-                    <a href="{{ url_for('download_file', filename=filename) }}" class="download-btn">下载处理后图片</a>
-                </div>
-                 <button type="button" class="btn" style="background-color: #28a745; color: white;" onclick="handleSaveData()">保存图纸源数据</button>
+                <h3>处理后图片</h3>
+                <img src="{{ processed_image }}" alt="处理后图片">
+                {% set filename = processed_image.split('/')[-1] %}
+                <a href="{{ url_for('download_file', filename=filename) }}" class="download-btn">下载处理后图片</a>
+            </div>
             
-                <button type="button" class="btn btn-primary" onclick="handleGoToDraw()">进入交互式绘图修改</button>
-
+            <div style="margin-top: 20px; display: flex; gap: 15px; justify-content: center;">
+                {% if user_level == 'vip' %}
+                    <button type="button" class="btn" style="background-color: #28a745; color: white; padding: 12px 24px; border: none; border-radius: 4px; cursor: pointer;" onclick="handleSaveData()">保存至云端 (VIP)</button>
+                {% endif %}
+                
+                <button type="button" class="btn" style="background-color: #17a2b8; color: white; padding: 12px 24px; border: none; border-radius: 4px; cursor: pointer;" onclick="handleDownloadData()">下载源数据到本地</button>
+                
+                <button type="button" class="btn" style="background-color: #007bff; color: white; padding: 12px 24px; border: none; border-radius: 4px; cursor: pointer;" onclick="handleGoToDraw()">进入交互式绘图修改</button>
+            </div>
             </div>
 
             {% endif %}
@@ -358,9 +364,10 @@
         }); // DOMContentLoaded 闭合
 
         // --- 4. 全局保存与跳转函数 (放在外面，确保 onclick 能找到) ---
+        // 1. VIP的云端保存逻辑 (原有逻辑优化)
         async function handleSaveData() {
             if (isSaved) {
-                alert("该图纸已保存，ID 为: " + currentDrawingId);
+                alert("该图纸已在云端保存，ID 为: " + currentDrawingId);
                 return true;
             }
 
@@ -378,7 +385,7 @@
                 if (result.status === 'success') {
                     isSaved = true;
                     currentDrawingId = drawingId;
-                    alert("图纸源数据保存成功！");
+                    alert("图纸已永久保存至云端！");
                     return true;
                 } else {
                     alert("保存失败: " + result.msg);
@@ -390,7 +397,46 @@
             }
         }
 
+        // 2. 本地下载逻辑 (新)
+        async function handleDownloadData() {
+            let drawingId = currentDrawingId;
+            // 如果还没落盘，先静默保存一次生成 .db 文件
+            if (!isSaved) {
+                drawingId = "local_" + Date.now().toString().slice(-6);
+                try {
+                    const resp = await fetch('/api/save_modified', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ drawing_id: drawingId })
+                    });
+                    const result = await resp.json();
+                    if (result.status === 'success') {
+                        isSaved = true;
+                        currentDrawingId = drawingId;
+                    } else {
+                        alert("准备下载失败: " + result.msg);
+                        return;
+                    }
+                } catch (e) {
+                    alert("网络请求出错");
+                    return;
+                }
+            }
+            
+            // 触发浏览器下载
+            window.location.href = `/api/download_source_db/${currentDrawingId}`;
+        }
+
+        // 3. 直接跳转画图页逻辑
+        function handleGoToDraw() {
+            // 后端的 /draw_page 路由已具备自动将 temp_result_data 静默落盘的能力
+            // 因此无需再弹窗打扰用户，直接跳转即可，普通用户的图纸会在5小时后被清理脚本自动擦除
+            window.location.href = "{{ url_for('draw_page') }}";
+        }
+        
+
         async function handleGoToDraw() {
+            /*
             if (!isSaved) {
                 const confirmed = confirm("进入绘图前需要先保存图纸源数据。现在保存吗？");
                 if (confirmed) {
@@ -400,6 +446,7 @@
                     return; 
                 }
             }
+            */
             window.location.href = "{{ url_for('draw_page') }}";
         }
     </script>

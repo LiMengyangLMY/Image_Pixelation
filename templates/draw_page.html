@@ -82,12 +82,15 @@
 <nav class="navbar navbar-dark bg-dark px-3">
     <span class="navbar-brand mb-0 h1">🎨 实时数据库绘图编辑器</span>
     <div class="d-flex align-items-center">
+        <a href="/" class="btn btn-outline-light btn-sm me-3">🏠 返回首页</a>
+        
         <span class="text-light me-3 small">缩放: <span id="zoom-val">100</span>%</span>
         <button class="btn btn-outline-info btn-sm me-2" onclick="toggleRefWindow()">我要参考图！！！</button>
         <button class="btn btn-outline-light btn-sm me-2" onclick="adjustZoom(1.2)">放大</button>
         <button class="btn btn-outline-light btn-sm me-2" onclick="adjustZoom(0.8)">缩小</button>
         <button class="btn btn-outline-warning btn-sm me-2" onclick="triggerUndo()">↩️ 撤回 (Ctrl+Z)</button>
-        <button class="btn btn-success btn-sm" onclick="downloadPreview()">下载预览图</button>
+        <button class="btn btn-success btn-sm me-2" onclick="downloadPreview()">下载预览图</button>
+        <button class="btn btn-primary btn-sm" onclick="downloadSourceDb()">下载源数据(.db)</button>
     </div>
 </nav>
 
@@ -127,12 +130,23 @@
     <div class="sidebar">
         <div class="step-box">
             <div class="step-title"><span class="step-num">1</span> 图纸库</div>
+            
+            {% if user_level == 'vip' %}
             <select id="draw-selector" class="form-select form-select-sm mb-2" onchange="loadDrawing(this.value)">
-                <option value="">-- 选择已有图纸 --</option>
+                <option value="">-- 选择云端已有图纸 --</option>
                 {% for d in drawings %}
-                <option value="{{d}}">{{d}}</option>
+                <option value="{{d}}" {% if d == current_id %}selected{% endif %}>{{d}}</option>
                 {% endfor %}
             </select>
+            {% else %}
+            <div class="alert alert-secondary p-2 mb-2" style="font-size: 11px;">
+                ⭐ 普通用户仅支持本地导入。<br>升级 VIP 解锁永久云端图纸库！
+            </div>
+            {% endif %}
+
+            <input type="file" id="db-upload-input" accept=".db" style="display: none;" onchange="uploadDrawingDB(event)">
+            <button class="btn btn-outline-secondary btn-sm w-100 mb-2" onclick="document.getElementById('db-upload-input').click()">📂 导入本地图纸 (.db)</button>
+            
             <button class="btn btn-outline-dark btn-sm w-100" onclick="showCreateModal()">🆕 新建空白图纸</button>
         </div>
 
@@ -949,6 +963,54 @@ canvas.onmouseup = async (e) => {
     }
     function loadRefImage(event) {
         if(refWinApp) refWinApp.loadImage(event);
+    }
+
+    // 【新增】下载当前图纸源数据
+    function downloadSourceDb() {
+        const currentId = "{{ current_id }}";
+        if (!currentId) {
+            alert("当前没有可下载的图纸数据");
+            return;
+        }
+        // 调用之前我们在 app.py 中新增的下载路由
+        window.location.href = `/api/download_source_db/${currentId}`;
+    }
+
+    // 上传导入本地的 .db 源文件
+    async function uploadDrawingDB(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        // 验证文件后缀
+        if (!file.name.endsWith('.db')) {
+            alert("只能导入 .db 格式的图纸源文件！");
+            event.target.value = ''; // 清空选择
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+            const resp = await fetch('/api/upload_drawing', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await resp.json();
+            
+            if (resp.ok && data.status === 'success') {
+                alert("图纸导入成功！");
+                // 导入成功后，携带新的 drawing_id 刷新当前页面
+                window.location.href = window.location.pathname + "?id=" + data.drawing_id;
+            } else {
+                alert("导入失败: " + (data.msg || "未知错误"));
+            }
+        } catch (err) {
+            console.error(err);
+            alert("网络异常，无法导入图纸");
+        } finally {
+            event.target.value = ''; // 允许连续上传同一个文件
+        }
     }
 </script>
 </body>

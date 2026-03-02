@@ -351,7 +351,8 @@ def image_conversion():
             limit_files(app.config['OUTPUT_FOLDER'])
             return render_template('image_conversion.html', success=True,
                                  original_image=url_for('static', filename=f'uploads/{input_filename}'),
-                                 processed_image=url_for('static', filename=f'outputs/{output_filename}'))
+                                 processed_image=url_for('static', filename=f'outputs/{output_filename}'),
+                                 user_level=current_user.user_level)
         except Exception as e:
             return render_template('image_conversion.html', error=f"处理失败: {e}")
     
@@ -545,6 +546,19 @@ def save_modified():
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
 
+@app.route('/api/download_source_db/<drawing_id>')
+@login_required
+def download_source_db(drawing_id):
+    """供用户将图纸的 .db 源文件下载到本地"""
+    from db_manager import get_db_path
+    import os
+    
+    db_path = get_db_path(drawing_id)
+    if not os.path.exists(db_path):
+        return "图纸源文件不存在或已过期被清理", 404
+        
+    return send_file(db_path, as_attachment=True, download_name=f"{drawing_id}.db")
+
 @app.route('/download_modified')
 @login_required
 def download_modified():
@@ -566,6 +580,37 @@ def download_modified():
     except Exception as e:
         return f"生成图片失败: {str(e)}", 500
 
+
+@app.route('/api/upload_drawing', methods=['POST'])
+@login_required
+def upload_drawing():
+    """接收用户上传的本地 .db 图纸文件，并将其暂存到该用户的专属目录"""
+    if 'file' not in request.files:
+        return jsonify({"status": "error", "msg": "没有选择文件"}), 400
+        
+    file = request.files['file']
+    if file.filename == '' or not file.filename.endswith('.db'):
+        return jsonify({"status": "error", "msg": "只能上传 .db 格式的图纸文件"}), 400
+
+    try:
+        from db_manager import get_user_dir
+        import uuid
+        import os
+        
+        # 1. 生成一个新的 ID 以避免覆盖用户原有数据
+        new_drawing_id = f"import_{str(uuid.uuid4())[:6]}"
+        
+        # 2. 获取该用户的专属存放目录
+        user_dir = get_user_dir(current_user.id)
+        save_path = os.path.join(user_dir, f"{new_drawing_id}.db")
+        
+        # 3. 保存文件并写入 Session
+        file.save(save_path)
+        session['drawing_id'] = new_drawing_id
+        
+        return jsonify({"status": "success", "drawing_id": new_drawing_id})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": f"上传处理失败: {str(e)}"}), 500
 # ————————————————————————————————#
 #          用户颜色库管理 API       #
 # ————————————————————————————————#
@@ -632,6 +677,80 @@ def api_delete_color_db():
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
 
+
+
+# ————————————————————————————————#
+#        vip图纸展示页面           #
+# ————————————————————————————————#
+@app.route('/my_drawings')
+@login_required
+def my_drawings():
+    """VIP 用户专属的图纸管理工作台"""
+    # 鉴权：拦截普通用户
+    if current_user.user_level != 'vip':
+        return redirect(url_for('home'))
+
+    from db_manager import get_user_dir
+    import os
+    from datetime import datetime
+
+    user_dir = get_user_dir(current_user.id)
+    drawings_list = []
+    
+    # 扫描用户目录，提取图纸信息
+    if os.path.exists(user_dir):
+        for f in os.listdir(user_dir):
+            if f.endswith('.db'):
+                file_path = os.path.join(user_dir, f)
+                try:
+                    mtime = os.path.getmtime(file_path)
+                    size = os.path.getsize(file_path)
+                    
+                    drawings_list.append({
+                        'id': f[:-3],  # 去掉 '.db' 后缀
+                        'mtime': datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S'),
+                        'size': round(size / 1024, 2)  # 转换为 KB
+                    })
+                except OSError:
+                    pass
+                    
+    # 按最后修改时间倒序排列 (最新的在最上面)
+    drawings_list.sort(key=lambda x: x['mtime'], reverse=True)
+    
+    return render_template('my_drawings.html', drawings=drawings_list)
+
+@app.route('/api/delete_drawing', methods=['POST'])
+@login_required
+def api_delete_drawing():
+    """彻底删除图纸及关联的快照文件"""
+    if current_user.user_level != 'vip':
+        return jsonify({"status": "error", "msg": "权限不足，仅 VIP 支持云端管理"}), 403
+
+    drawing_id = request.json.get('drawing_id')
+    if not drawing_id:
+        return jsonify({"status": "error", "msg": "缺少参数"}), 400
+
+    from db_manager import get_db_path
+    import os
+    
+    db_path = get_db_path(drawing_id)
+    
+    if os.path.exists(db_path):
+        try:
+            # 删除主数据库文件
+            os.remove(db_path)
+            
+            # 删除相关的撤销快照文件 (.snap_0 到 .snap_15)
+            for i in range(15):
+                snap_path = f"{db_path}.snap_{i}"
+                if os.path.exists(snap_path):
+                    os.remove(snap_path)
+                    
+            return jsonify({"status": "success", "msg": "删除成功"})
+        except Exception as e:
+            return jsonify({"status": "error", "msg": f"删除失败: {str(e)}"}), 500
+            
+    return jsonify({"status": "error", "msg": "图纸文件不存在"}), 404
 
 
 # ————————————————————————————————#
@@ -777,7 +896,7 @@ def batch_update():
     new_id = str(data['new_id'])
     new_counts = batch_update_in_db(drawing_id, old_id, new_id)
     return jsonify({"status": "success", "new_counts": new_counts})
-@app.route('/api/undo', methods=['POST'])
+
 
 # 输入rgb找相近色
 @app.route('/api/find_nearest_color', methods=['POST'])
@@ -811,6 +930,7 @@ def api_find_nearest_color():
         return jsonify({"status": "error", "msg": str(e)}), 500
 
 @login_required
+@app.route('/api/undo', methods=['POST'])
 def undo_action():
     drawing_id = session.get('drawing_id')
     if not drawing_id: return jsonify({"status": "error", "msg": "会话丢失"}), 400
