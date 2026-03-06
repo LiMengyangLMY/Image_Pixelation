@@ -1,0 +1,147 @@
+/* ==========================================
+   全局变量与通用样式 (Global Variables & Utils)
+   ========================================== */
+:root { 
+    --primary: #4a90e2; 
+    --primary-hover: #357abd;
+    --vip: #f5a623; 
+    --vip-hover: #e69512;
+    --bg-light: #f4f7f6;
+    --text-main: #333;
+    --border-color: #ddd;
+}
+
+/* VIP 专属徽章 (首页、工作台通用) */
+.badge-vip { 
+    background-color: var(--vip); 
+    color: white; 
+    margin-left: 5px; 
+}
+
+/* 带有 Bootstrap 顶部固定导航栏的页面通用 Body */
+body.with-fixed-nav { 
+    background-color: #f8f9fa; 
+    padding-top: 70px; 
+    min-height: 100vh; 
+}
+
+
+/* ==========================================
+   1. 登录与注册页 (login.html)
+   ========================================== */
+body.login-body { 
+    font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; 
+    background: var(--bg-light); 
+    display: flex; 
+    justify-content: center; 
+    align-items: center; 
+    min-height: 100vh; 
+    margin: 0; 
+}
+.auth-card { background: white; width: 400px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); overflow: hidden; }
+.tabs { display: flex; background: #f9f9f9; border-bottom: 1px solid #eee; }
+.tab { flex: 1; padding: 15px; text-align: center; cursor: pointer; color: #666; font-size: 14px; transition: all 0.3s ease; }
+.tab.active { background: white; color: var(--primary); font-weight: bold; border-bottom: 3px solid var(--primary); }
+.tab.vip-tab { color: var(--vip); }
+.tab.vip-tab.active { border-bottom-color: var(--vip); }
+.form-container { padding: 30px; }
+.login-body .form-section { display: none; }
+.login-body .form-section.active { display: block; }
+.input-group { margin-bottom: 15px; }
+.input-group label { display: block; font-size: 12px; color: #666; margin-bottom: 5px; }
+.input-group input { width: 100%; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; box-sizing: border-box; outline: none; transition: 0.2s; }
+.input-group input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(74,144,226,0.1); }
+.verify-box { display: flex; gap: 10px; }
+.btn-verify { white-space: nowrap; width: 130px; background: #eee; color: #555; font-size: 12px; border: 1px solid #ccc; cursor: pointer; border-radius: 8px; }
+.btn-verify:disabled { cursor: not-allowed; opacity: 0.6; }
+.login-body button.main-btn { width: 100%; padding: 13px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: bold; transition: 0.3s; margin-top: 10px; }
+.btn-primary { background: var(--primary); color: white; }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-vip { background: var(--vip); color: white; }
+.btn-vip:hover { background: var(--vip-hover); }
+.footer-links { margin-top: 20px; text-align: center; font-size: 13px; color: var(--primary); cursor: pointer; }
+.hint { font-size: 12px; color: #999; margin-bottom: 15px; line-height: 1.5; }
+
+
+/* ==========================================
+   2. 图片转换页 (image_conversion.html)
+   ========================================== */
+body.conversion-body { max-width: 1200px; margin: 0 auto; padding: 20px; background-color: #f5f5f5; font-family: Arial, sans-serif; }
+.conversion-container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+.conversion-container h1 { color: #333; margin-bottom: 20px; text-align: center; }
+.conversion-container .form-section { margin-bottom: 30px; display: block; }
+.conversion-container .form-group { margin-bottom: 15px; }
+.conversion-container label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
+.conversion-container input[type="file"], .conversion-container select { padding: 10px; border: 1px solid #ddd; border-radius: 4px; width: 100%; }
+.conversion-container input[type="number"] { padding: 10px; border: 1px solid #ddd; border-radius: 4px; width: 100%; max-width: 200px; }
+.conversion-container button[type="submit"] { background-color: #4CAF50; color: white; padding: 12px 24px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin-top: 10px; }
+.conversion-container button[type="submit"]:hover { background-color: #45a049; }
+.result-section { margin-top: 40px; display: none; }
+.result-section.show { display: block; }
+.image-container { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 20px; }
+.image-box { flex: 1; min-width: 300px; }
+.image-box img { max-width: 100%; border: 1px solid #ddd; border-radius: 4px; }
+.image-box h3 { margin-bottom: 10px; color: #333; }
+.download-btn { display: inline-block; background-color: #008CBA; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px; margin-top: 10px; }
+.download-btn:hover { background-color: #007B9E; }
+.error-message { color: #f44336; padding: 10px; background-color: #ffebee; border-radius: 4px; margin-bottom: 20px; }
+.success-message { color: #4CAF50; padding: 10px; background-color: #e8f5e9; border-radius: 4px; margin-bottom: 20px; }
+
+
+/* ==========================================
+   3. 在线绘图编辑器 (draw_page.html)
+   ========================================== */
+body.editor-body { background: #f0f2f5; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+.main-container { display: flex; flex: 1; overflow: hidden; }
+#canvas-area { flex: 1; overflow: auto; background: #555; padding: 30px; display: flex; align-items: flex-start; justify-content: center; position: relative; }
+canvas { background: #fff; box-shadow: 0 0 20px rgba(0,0,0,0.3); cursor: crosshair; }
+.sidebar { width: 340px; background: white; border-left: 1px solid #ddd; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; }
+.step-box { background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #eee; }
+.step-title { font-size: 0.9rem; font-weight: bold; color: #666; margin-bottom: 12px; display: flex; align-items: center; }
+.step-num { background: #0d6efd; color: white; width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; margin-right: 8px; }
+.palette-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(30px, 1fr)); gap: 10px; max-height: 250px; overflow-y: auto; padding: 5px; }
+.swatch-wrapper { display: flex; flex-direction: column; align-items: center; cursor: pointer; }
+.swatch-item { width: 25px; height: 25px; border: 1px solid #ccc; border-radius: 4px; transition: all 0.1s; position: relative; }
+.swatch-id { font-size: 10px; color: #666; margin-top: 1px; font-weight: bold; }
+.swatch-wrapper:hover .swatch-item { transform: scale(1.1); border-color: #000; }
+.swatch-wrapper.active .swatch-item { border: 3px solid #0d6efd; box-shadow: 0 0 5px rgba(13,110,253,0.5); }
+#stats-window { position: fixed; top: 80px; left: 20px; width: 220px; background: rgba(255,255,255,0.95); border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 1000; cursor: move; }
+.stats-header { background: #f8f9fa; padding: 8px 12px; border-bottom: 1px solid #eee; font-weight: bold; font-size: 13px; display: flex; justify-content: space-between; }
+#stats-content { max-height: 250px; overflow-y: auto; padding: 10px; }
+.stats-item { display: flex; align-items: center; margin-bottom: 6px; font-size: 12px; padding: 4px; border-radius: 4px; }
+.stats-dot { width: 14px; height: 14px; border-radius: 2px; margin-right: 8px; border: 1px solid #999; }
+.crop-active { cursor: nwse-resize !important; }
+
+/* 悬浮参考图 */
+#ref-window { position: fixed; top: 120px; right: 360px; width: 300px; height: 350px; background: rgba(255,255,255,0.95); border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 1000; display: none; flex-direction: column; resize: both; overflow: hidden; }
+.ref-header { background: #f8f9fa; padding: 8px 12px; border-bottom: 1px solid #eee; font-weight: bold; font-size: 13px; display: flex; justify-content: space-between; align-items: center; cursor: move; user-select: none; }
+.ref-body { flex: 1; position: relative; overflow: hidden; background: #e9ecef; display: flex; align-items: center; justify-content: center; }
+.ref-upload-box { text-align: center; padding: 20px; width: 100%; }
+#ref-img-container { width: 100%; height: 100%; position: absolute; top: 0; left: 0; cursor: grab; overflow: hidden; }
+#ref-img-container:active { cursor: grabbing; }
+#ref-img { position: absolute; transform-origin: top left; pointer-events: none; }
+.picker-crosshair { cursor: crosshair !important; }
+.picker-cursor:active { cursor: grabbing !important; }
+
+
+/* ==========================================
+   4. 颜色库管理 (colors.html)
+   ========================================== */
+.color-group { margin-bottom: 40px; border-top: 2px solid #eee; padding-top: 20px; }
+.color-card { width: 180px; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: transform 0.2s; display: inline-block; margin: 10px; vertical-align: top; }
+.clickable-card { cursor: pointer; }
+.clickable-card:hover { transform: translateY(-5px); border: 1px solid #0d6efd; }
+.swatch { height: 80px; display: flex; align-items: center; justify-content: center; font-weight: bold; }
+.color-card .info { padding: 10px; font-size: 0.75rem; background: #fff; }
+.lab-val { color: #666; font-style: italic; }
+.prefix-badge { font-size: 1.5rem; margin-bottom: 20px; color: #333; }
+.colors-toolbar { position: sticky; top: 0; z-index: 1000; background: white; border-bottom: 1px solid #ddd; padding: 15px 0; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+
+
+/* ==========================================
+   5. 首页与工作台 (index.html, my_drawings.html)
+   ========================================== */
+.nav-card { transition: transform 0.3s; cursor: pointer; text-decoration: none; color: inherit; }
+.nav-card:hover { transform: translateY(-10px); }
+.icon-box { font-size: 3rem; margin-bottom: 1rem; }
+.table-hover tbody tr:hover { background-color: #f1f3f5; transition: background-color 0.2s; }

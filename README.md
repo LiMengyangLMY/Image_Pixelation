@@ -148,7 +148,9 @@ Image_Pixelation/
 │
 ├─static/
 │  ├─outputs/               # 转换结果图片缓存
-│  └─uploads/               # 上传原图缓存
+│  ├─uploads/               # 上传原图缓存
+│  └─css/                   # 页面样式
+│      └─style.css
 │
 └─templates/                # 前端页面
        index.html           # 首页 / 仪表盘
