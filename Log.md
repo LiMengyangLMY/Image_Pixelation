@@ -130,16 +130,16 @@
 
 经过 `python --version` 和路径排查，发现存在**系统路径遮蔽（Path Shadowing）**现象：
 
-* **VS Code** 配置使用的是 Anaconda 的 `pindou` 环境（Python 3.9）。
+* **VS Code** 配置使用的是 Anaconda 的 `env_1` 环境（Python 3.9）。
 * **终端命令行** 默认调用的却是 D 盘根目录下的原生 Python (Python 3.13) 甚至是老旧的 Python 2.7。
 * **依赖错位**：我们把库安装到了 Conda 环境中，但运行时却被系统环境变量导向了没有安装库的 Python 2.7/3.13，导致“有库却找不到”和“语法不兼容”。
 
 ### 解决方案
 
-1. **创建专用环境**：新建了名为 `pindou` 的 Conda 环境 (Python 3.9)，隔离依赖。
+1. **创建专用环境**：新建了名为 `env_1` 的 Conda 环境 (Python 3.9)，隔离依赖。
 2. **强制指定路径**：放弃依赖系统 `path` 自动查找，改用**绝对路径**运行命令。
-* 安装依赖：`D:\...\envs\pindou\python.exe -m pip install ...`
-* 启动项目：`D:\...\envs\pindou\python.exe app.py`
+* 安装依赖：`D:\...\envs\env_1\python.exe -m pip install ...`
+* 启动项目：`D:\...\envs\env_1\python.exe app.py`
 
 
 3. **编写自检脚本**：开发了 `test_env.py`，用于一键检测当前 Python 版本及所有核心库（Flask, OpenCV, Numpy等）的安装状态，确保环境无误。
